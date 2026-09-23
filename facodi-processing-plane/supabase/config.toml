@@ -1,0 +1,23 @@
+project_id = "facodi-processing-plane"
+
+[api]
+enabled = true
+schemas = ["public", "facodi", "tube"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+major_version = 16
+
+[edge_runtime]
+enabled = true
+policy = "oneshot"
+
+[functions.v2_process_video_pipeline]
+verify_jwt = false
+
+[functions.v2_sync_object_to_odoo]
+verify_jwt = true
+
+[functions.v2_push_odoo_learning_object]
+verify_jwt = true
