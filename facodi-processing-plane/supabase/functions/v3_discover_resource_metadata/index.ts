@@ -17,7 +17,15 @@ function requiredPublicUrl(value: unknown): string {
     throw new HttpError(400, "invalid_source_url", "source_url is required.");
   }
 
-  const raw = value.trim().slice(0, 4096);
+  const raw = value.trim();
+  if (raw.length > 4096) {
+    throw new HttpError(
+      400,
+      "invalid_source_url",
+      "source_url is too long.",
+    );
+  }
+
   let url: URL;
   try {
     url = new URL(raw);
@@ -54,7 +62,14 @@ Deno.serve((req) =>
     ensureMethod(req, "POST");
     requireSecretApiKey(req);
 
-    const body = await readJson<MetadataRequest>(req);
+    const body = await readJson<MetadataRequest | null>(req);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        "Request body must be a JSON object.",
+      );
+    }
     const sourceUrl = requiredPublicUrl(body.source_url);
     const metadata = await fetchResourceMetadata(sourceUrl);
 
