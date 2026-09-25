@@ -190,7 +190,7 @@ export async function fetchResourceMetadata(
       null,
     duration_seconds: duration ? Number(duration) : fallback.duration_seconds ?? null,
     published_at: publishDate || fallback.published_at || null,
-    language: fallback.language || audioLanguage || htmlLanguage || null,
+    language: audioLanguage || fallback.language || htmlLanguage || null,
     metadata_source: "youtube_public",
   };
 }
