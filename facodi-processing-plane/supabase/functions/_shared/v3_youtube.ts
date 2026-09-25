@@ -152,7 +152,10 @@ export async function fetchResourceMetadata(
   const audioLanguage =
     firstMatch(html, /"defaultAudioLanguage":"([^"]+)"/) ||
     firstMatch(html, /"defaultLanguage":"([^"]+)"/);
-  const htmlLanguage = firstMatch(html, /<html[^>]+lang=["']([^"']+)["']/i);
+  const captionLanguage = firstMatch(
+    html,
+    /"captionTracks":\[\{[\s\S]{0,4000}?"languageCode":"([^"]+)"/,
+  );
   const ogTitle = firstMatch(
     html,
     /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
@@ -190,7 +193,7 @@ export async function fetchResourceMetadata(
       null,
     duration_seconds: duration ? Number(duration) : fallback.duration_seconds ?? null,
     published_at: publishDate || fallback.published_at || null,
-    language: audioLanguage || fallback.language || htmlLanguage || null,
+    language: audioLanguage || captionLanguage || fallback.language || null,
     metadata_source: "youtube_public",
   };
 }
