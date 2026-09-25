@@ -21,3 +21,6 @@ verify_jwt = true
 
 [functions.v2_push_odoo_learning_object]
 verify_jwt = true
+
+[functions.v3_analyze_learning_resource]
+verify_jwt = false
