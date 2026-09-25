@@ -32,6 +32,11 @@ The Edge Function:
 The processing-jobs table has RLS enabled and no anon/authenticated grants. Secret
 keys and Gemini keys are never persisted in request/result payloads.
 
+Once a processing-job row exists, provider failures return only a sanitized error
+plus the opaque `processing_job_id` correlation UUID. Odoo may persist that UUID in
+its audit error text so operators can correlate a failed Odoo analysis job with the
+private Supabase processing evidence without exposing provider responses or secrets.
+
 ## Follow-up
 
 Move `GEMINI_API_KEY` into Supabase project secrets so the Odoo header fallback can
