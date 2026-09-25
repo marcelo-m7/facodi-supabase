@@ -51,6 +51,13 @@ snapshots/
 tests/
 ```
 
+## Current v3 entry points
+
+- `v3_analyze_learning_resource`: privileged, idempotent learning-resource enrichment + analysis for Odoo jobs.
+- `v3_discover_resource_metadata`: privileged metadata-only discovery used by the public Odoo contribution form through a server-side proxy. It never runs Gemini analysis and never persists publication decisions.
+
+Both endpoints use modern Supabase secret-key authentication inside the function with `verify_jwt=false`; callers send the secret only on the `apikey` header. The browser never receives a secret key.
+
 ## Workflow
 
 1. Capture the currently deployed FACODI-relevant Edge Functions and schema contracts.

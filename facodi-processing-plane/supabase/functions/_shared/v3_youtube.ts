@@ -149,6 +149,9 @@ export async function fetchResourceMetadata(
   const publishDate =
     firstMatch(html, /"publishDate":"([^"]+)"/) ||
     firstMatch(html, /"uploadDate":"([^"]+)"/);
+  const audioLanguage =
+    firstMatch(html, /"defaultAudioLanguage":"([^"]+)"/) ||
+    firstMatch(html, /"defaultLanguage":"([^"]+)"/);
   const htmlLanguage = firstMatch(html, /<html[^>]+lang=["']([^"']+)["']/i);
   const ogTitle = firstMatch(
     html,
@@ -187,7 +190,7 @@ export async function fetchResourceMetadata(
       null,
     duration_seconds: duration ? Number(duration) : fallback.duration_seconds ?? null,
     published_at: publishDate || fallback.published_at || null,
-    language: fallback.language || htmlLanguage || null,
+    language: audioLanguage || fallback.language || htmlLanguage || null,
     metadata_source: "youtube_public",
   };
 }
