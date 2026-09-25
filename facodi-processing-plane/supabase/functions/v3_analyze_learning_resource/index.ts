@@ -320,7 +320,7 @@ Deno.serve((req) =>
       const code = error instanceof HttpError ? error.code : "unexpected_error";
       const message =
         error instanceof Error ? error.message.slice(0, 1000) : "Unexpected processing error.";
-      await admin
+      const failed = await admin
         .from("facodi_processing_jobs")
         .update({
           status: "failed",
@@ -330,6 +330,19 @@ Deno.serve((req) =>
           completed_at: new Date().toISOString(),
         })
         .eq("id", jobId);
+
+      if (failed.error) {
+        console.error("FACODI analysis failure evidence could not be persisted", {
+          processing_job_id: jobId,
+          original_error: error,
+          persistence_error: failed.error,
+        });
+        throw new HttpError(
+          500,
+          "supabase_error",
+          "Learning-resource failure evidence could not be persisted.",
+        );
+      }
 
       const status = error instanceof HttpError ? error.status : 500;
       throw new HttpError(
