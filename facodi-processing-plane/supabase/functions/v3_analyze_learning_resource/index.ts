@@ -330,7 +330,16 @@ Deno.serve((req) =>
           completed_at: new Date().toISOString(),
         })
         .eq("id", jobId);
-      throw error;
+
+      const status = error instanceof HttpError ? error.status : 500;
+      throw new HttpError(
+        status,
+        code,
+        "Learning-resource analysis failed.",
+        {
+          processing_job_id: jobId,
+        },
+      );
     }
   })
 );
