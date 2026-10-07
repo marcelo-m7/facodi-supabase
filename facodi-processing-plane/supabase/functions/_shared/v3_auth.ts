@@ -20,6 +20,13 @@ function configuredSecretKeys(): string[] {
     }
   }
 
+  // Transitional compatibility: the FACODI runtime historically stored
+  // the privileged Supabase credential in SUPABASE_SECRET_KEY and may
+  // still contain the legacy service_role JWT. Hosted Edge Functions
+  // expose that key as SUPABASE_SERVICE_ROLE_KEY.
+  const legacyServiceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
+  if (legacyServiceRole) values.push(legacyServiceRole);
+
   const fallback = Deno.env.get("SUPABASE_SECRET_KEY")?.trim();
   if (fallback) values.push(fallback);
 
@@ -34,6 +41,13 @@ export function requireSecretApiKey(req: Request): string {
 
   const accepted = configuredSecretKeys();
   if (!accepted.length || !accepted.includes(provided)) {
+    console.warn("FACODI Edge authentication rejected a server request", {
+      credential_kind: provided.startsWith("sb_secret_")
+        ? "secret"
+        : provided.startsWith("eyJ")
+        ? "legacy_jwt"
+        : "unknown",
+    });
     throw new HttpError(401, "unauthorized", "Invalid Supabase secret API key.");
   }
 
