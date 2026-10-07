@@ -1,4 +1,4 @@
-import { HttpError } from "./v2_http.ts";
+import { HttpError } from "./http.ts";
 import type { ResourceMetadata } from "./v3_youtube.ts";
 
 export interface LearningAnalysis {
