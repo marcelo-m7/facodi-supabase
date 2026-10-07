@@ -4,7 +4,7 @@ import {
   json,
   readJson,
   withHttp,
-} from "../_shared/v2_http.ts";
+} from "../_shared/http.ts";
 import { requireSecretApiKey } from "../_shared/v3_auth.ts";
 import { fetchResourceMetadata } from "../_shared/v3_youtube.ts";
 
