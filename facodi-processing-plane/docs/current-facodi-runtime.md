@@ -20,7 +20,7 @@ Do not configure FACODI callers to use these historical Open2 functions:
 - `v2_process_video_pipeline`
 - `v2_sync_object_to_odoo`
 - `v2_push_odoo_learning_object`
-- the remaining `v2_*` catalog recorded under `snapshots/live-open2/`
+- the remaining historical Open2 `v2_*` catalog preserved only in Git history
 
 Those mechanisms depended on Open2-only schemas/RPCs such as `facodi.queue_analysis_job`, `facodi.queue_odoo_sync_job`, and the old `tube`/FACODI queue topology. They are intentionally absent from the FACODI runtime.
 

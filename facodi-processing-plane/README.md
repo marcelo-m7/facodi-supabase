@@ -22,9 +22,7 @@ This repository does not own:
 
 ## Open2 historical evidence
 
-The Open2 project is no longer a FACODI runtime dependency. Historical captures remain under `snapshots/live-open2/` only for provenance and migration archaeology.
-
-Anything under `snapshots/live-open2/` is **not** an instruction to deploy that function to the FACODI project. The deployable `supabase/functions/` tree is now limited to mechanisms implemented against the current FACODI schema.
+The Open2 project is no longer a FACODI runtime dependency. Its captured functions were removed from the current working tree so code search and agents cannot mistake them for FACODI mechanisms. Their provenance remains available in Git history before the FACODI-only cleanup.
 
 ## Layout
 
@@ -36,13 +34,7 @@ supabase/
 
 docs/
   adr/
-  live-function-inventory.md
-
-scripts/
-  extract_live_function_snapshot.py
-
-snapshots/
-  live-open2/
+  current-facodi-runtime.md
 
 tests/
 ```
@@ -60,7 +52,7 @@ The Open2-only surfaces `v2_process_video_pipeline`, `v2_sync_object_to_odoo`, a
 
 ## Workflow
 
-1. Treat the FACODI project and this current-function manifest as the source of truth.
-2. Keep Open2 captures immutable under `snapshots/live-open2/`.
+1. Treat the FACODI project and `docs/current-facodi-runtime.md` as the source of truth.
+2. Use Git history only when historical Open2 provenance is explicitly needed.
 3. Implement new mechanisms directly against the current FACODI schema and secret-key contract.
 4. Preserve Odoo as the editorial system of record; Supabase persists processing evidence, not publication decisions.
