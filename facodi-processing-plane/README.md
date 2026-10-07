@@ -20,15 +20,11 @@ This repository does not own:
 - Odoo `slide.channel` / `slide.slide` publication UX;
 - deployment composition for the Odoo runtime.
 
-## Initial bootstrap
+## Open2 historical evidence
 
-The first implementation cut preserves live Open2 function snapshots under `snapshots/live-open2/` and materializes selected captured functions into `supabase/functions/`.
+The Open2 project is no longer a FACODI runtime dependency. Historical captures remain under `snapshots/live-open2/` only for provenance and migration archaeology.
 
-That bootstrap is intentionally conservative:
-
-- raw captured artifacts are stored verbatim for provenance;
-- extracted function files are generated from those artifacts;
-- later refactors should keep a clear diff from the captured baseline.
+Anything under `snapshots/live-open2/` is **not** an instruction to deploy that function to the FACODI project. The deployable `supabase/functions/` tree is now limited to mechanisms implemented against the current FACODI schema.
 
 ## Layout
 
@@ -51,16 +47,20 @@ snapshots/
 tests/
 ```
 
-## Current v3 entry points
+## Current FACODI entry points
 
 - `v3_analyze_learning_resource`: privileged, idempotent learning-resource enrichment + analysis for Odoo jobs.
 - `v3_discover_resource_metadata`: privileged metadata-only discovery used by the public Odoo contribution form through a server-side proxy. It never runs Gemini analysis and never persists publication decisions.
+- `v3_ingest_youtube_video`: privileged, metadata-only YouTube ingest. It normalizes identity, stores idempotent processing evidence in `public.facodi_processing_jobs`, and never publishes Odoo content.
+- `v2_ingest_youtube_video`: temporary compatibility alias that executes the same FACODI-native v3 ingest contract. It exists only so older callers can migrate without depending on Open2.
 
-Both endpoints use modern Supabase secret-key authentication inside the function with `verify_jwt=false`; callers send the secret only on the `apikey` header. The browser never receives a secret key.
+All four endpoints use modern Supabase secret-key authentication inside the function with `verify_jwt=false`; callers send the secret only on the `apikey` header. The browser never receives a secret key.
+
+The Open2-only surfaces `v2_process_video_pipeline`, `v2_sync_object_to_odoo`, and `v2_push_odoo_learning_object` are not FACODI runtime functions and must not be deployed from this repository.
 
 ## Workflow
 
-1. Capture the currently deployed FACODI-relevant Edge Functions and schema contracts.
-2. Commit the raw snapshots.
-3. Extract the function sources into `supabase/functions/`.
-4. Refactor toward queue-driven v3 workers with append-only analysis history and idempotent Odoo sync.
+1. Treat the FACODI project and this current-function manifest as the source of truth.
+2. Keep Open2 captures immutable under `snapshots/live-open2/`.
+3. Implement new mechanisms directly against the current FACODI schema and secret-key contract.
+4. Preserve Odoo as the editorial system of record; Supabase persists processing evidence, not publication decisions.
