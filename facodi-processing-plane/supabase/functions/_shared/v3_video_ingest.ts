@@ -5,7 +5,7 @@ import {
   json,
   readJson,
   withHttp,
-} from "./v2_http.ts";
+} from "./http.ts";
 import { requireSecretApiKey } from "./v3_auth.ts";
 import {
   canonicalYouTubeUrl,
