@@ -1,6 +1,6 @@
 # Live Open2 Function Inventory
 
-> Historical note (2026-10-07): this file inventories functions observed in the earlier Open2 environment. It is **not** the deployment manifest for the current FACODI Supabase project `bhfywztfyidvrlarebmg`. The current project exposes the supported v3 entry points `v3_analyze_learning_resource` and `v3_discover_resource_metadata`; `v2_ingest_youtube_video` is not deployed there and must not be assumed available by consumers.
+> Historical note (2026-10-07): this file inventories functions observed in the earlier Open2 environment. It is **not** the deployment manifest for the current FACODI Supabase project `bhfywztfyidvrlarebmg`. This file describes Open2 history only. The authoritative FACODI inventory is `docs/current-facodi-runtime.md`; do not infer deployable functions from this document.
 This inventory records the FACODI-relevant Edge Functions discovered in the live Open2 Supabase project during the bootstrap of `facodi-processing-plane`.
 
 ## Captured baseline snapshots
@@ -9,7 +9,7 @@ This inventory records the FACODI-relevant Edge Functions discovered in the live
 - `v2_sync_object_to_odoo`
 - `v2_push_odoo_learning_object`
 
-These snapshots are stored verbatim under `snapshots/live-open2/functions/` and extracted into `supabase/functions/`.
+These snapshots remain stored verbatim under `snapshots/live-open2/functions/` for provenance. Their Open2 entry points are intentionally not present in the deployable FACODI `supabase/functions/` tree.
 
 ## Additional FACODI-oriented functions observed
 
@@ -39,5 +39,5 @@ These snapshots are stored verbatim under `snapshots/live-open2/functions/` and 
 ## Notes
 
 - The function catalog currently mixes canonical FACODI candidates with older or overlapping Open2 surfaces.
-- `v2_process_video_pipeline` was observed with `verify_jwt = false` and internal shared-secret authentication. That is preserved in the bootstrap config as an observation, not a final security stance.
-- Future imports should add the remaining FACODI functions as raw snapshots first, then extract their source into `supabase/functions/`.
+- `v2_process_video_pipeline` was observed with `verify_jwt = false` and internal shared-secret authentication. That fact remains historical evidence only; the function is no longer present in the FACODI deployable config.
+- Future FACODI mechanisms must be implemented against the current FACODI schema. Do not copy Open2 functions into `supabase/functions/` merely because they appear in this inventory.
