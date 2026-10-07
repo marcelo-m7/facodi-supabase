@@ -39,5 +39,5 @@ These snapshots remain stored verbatim under `snapshots/live-open2/functions/` f
 ## Notes
 
 - The function catalog currently mixes canonical FACODI candidates with older or overlapping Open2 surfaces.
-- `v2_process_video_pipeline` was observed with `verify_jwt = false` and internal shared-secret authentication. That is preserved in the bootstrap config as an observation, not a final security stance.
+- `v2_process_video_pipeline` was observed with `verify_jwt = false` and internal shared-secret authentication. That fact remains historical evidence only; the function is no longer present in the FACODI deployable config.
 - Future FACODI mechanisms must be implemented against the current FACODI schema. Do not copy Open2 functions into `supabase/functions/` merely because they appear in this inventory.
