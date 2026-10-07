@@ -1,0 +1,23 @@
+name: FACODI Supabase runtime contract
+
+on:
+  pull_request:
+    paths:
+      - "facodi-processing-plane/**"
+      - ".github/workflows/facodi-supabase-runtime.yml"
+  push:
+    branches: [master]
+    paths:
+      - "facodi-processing-plane/**"
+      - ".github/workflows/facodi-supabase-runtime.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate FACODI-only Supabase runtime
+        run: python3 -m unittest discover -s facodi-processing-plane/tests -p 'test_*.py' -v
