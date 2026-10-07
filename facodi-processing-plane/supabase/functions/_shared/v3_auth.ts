@@ -1,4 +1,4 @@
-import { HttpError } from "./v2_http.ts";
+import { HttpError } from "./http.ts";
 
 function configuredSecretKeys(): string[] {
   const values: string[] = [];
