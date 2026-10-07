@@ -1,5 +1,6 @@
 # Live Open2 Function Inventory
 
+> Historical note (2026-10-07): this file inventories functions observed in the earlier Open2 environment. It is **not** the deployment manifest for the current FACODI Supabase project `bhfywztfyidvrlarebmg`. The current project exposes the supported v3 entry points `v3_analyze_learning_resource` and `v3_discover_resource_metadata`; `v2_ingest_youtube_video` is not deployed there and must not be assumed available by consumers.
 This inventory records the FACODI-relevant Edge Functions discovered in the live Open2 Supabase project during the bootstrap of `facodi-processing-plane`.
 
 ## Captured baseline snapshots
