@@ -2,28 +2,28 @@ project_id = "facodi-processing-plane"
 
 [api]
 enabled = true
-schemas = ["public", "facodi", "tube"]
+schemas = ["public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
 [db]
-major_version = 16
+major_version = 17
 
 [edge_runtime]
 enabled = true
 policy = "oneshot"
 
-[functions.v2_process_video_pipeline]
-verify_jwt = false
-
-[functions.v2_sync_object_to_odoo]
-verify_jwt = true
-
-[functions.v2_push_odoo_learning_object]
-verify_jwt = true
-
 [functions.v3_analyze_learning_resource]
 verify_jwt = false
 
 [functions.v3_discover_resource_metadata]
+verify_jwt = false
+
+[functions.v3_ingest_youtube_video]
+verify_jwt = false
+
+# Temporary compatibility alias for callers that still carry the historical
+# Open2-era function name. The implementation delegates to the FACODI-native
+# v3 ingest contract and does not depend on the Open2 schema.
+[functions.v2_ingest_youtube_video]
 verify_jwt = false
