@@ -8,7 +8,7 @@ import { ensureMethod, HttpError, json, withHttp } from "../_shared/http.ts";
 export default {
   fetch: withSupabase({ auth: "secret:*" }, async (req, ctx) => {
     const rpc: CanonicalRpc = async (name, values) => {
-      const { data, error } = await ctx.supabaseAdmin.rpc(name, values);
+      const { data, error } = await ctx.supabaseAdmin.rpc(name, values).abortSignal(AbortSignal.timeout(10000));
       if (error) throw new HttpError(error.code === "22023" ? 409 : 503, "canonical_boundary_failed");
       return data;
     };

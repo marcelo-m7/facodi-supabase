@@ -13,6 +13,7 @@ function fixture() {
   const job = {
     id: crypto.randomUUID(), task_ref: `task:${crypto.randomUUID()}`, company_id: 1,
     cohort: "p2", attempt: 1, claim_token: crypto.randomUUID(), checkpoint: {},
+    lease_until: new Date(Date.now() + 120000).toISOString(),
     request_payload: {
       source_type: "manual", source_url: "", title: "Private evidence",
       raw_content: "Human supplied text", language: "pt", provider_config: { provider: "baseline", version: "regex-frequency-v2-evidence" },
@@ -78,6 +79,16 @@ Deno.test("attempt budget terminates without another paid provider call", async 
   const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
   assert(result.error_code === "ATTEMPT_BUDGET_EXHAUSTED");
   assert(test.calls.join(",") === "failed");
+});
+
+Deno.test("insufficient lease budget never starts a paid provider call", async () => {
+  const test = fixture();
+  test.job.checkpoint = { metadata: test.metadata };
+  test.job.lease_until = new Date(Date.now() + 10000).toISOString();
+  let rejected = false;
+  try { await processCanonicalJob(test.boundary); }
+  catch (error) { rejected = String(error).includes("INSUFFICIENT_LEASE_BUDGET"); }
+  assert(rejected && test.calls.length === 0);
 });
 
 Deno.test("oversized provider output terminates instead of spending the budget again", async () => {

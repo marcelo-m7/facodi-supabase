@@ -18,6 +18,7 @@ export interface CanonicalJob {
   cohort: string;
   attempt: number;
   claim_token: string;
+  lease_until: string;
   request_payload: CanonicalRequest;
   checkpoint: Record<string, unknown>;
 }
@@ -98,6 +99,9 @@ export async function processCanonicalJob(boundary: WorkerBoundary): Promise<unk
   }
   let analysis = job.checkpoint.analysis as AnalysisCheckpoint | undefined;
   if (!analysis) {
+    if (!Number.isFinite(Date.parse(job.lease_until)) || Date.parse(job.lease_until) - Date.now() < 75000) {
+      throw new HttpError(503, "INSUFFICIENT_LEASE_BUDGET");
+    }
     analysis = await boundary.analyze(metadata, request);
     if (new TextEncoder().encode(JSON.stringify(analysis)).length > 60000) {
       return await boundary.finish(job, "failed", { error_code: "OUTPUT_BUDGET_EXHAUSTED" });
