@@ -3,7 +3,7 @@ select pgmq.create('facodi_canonical_analysis');
 
 create table public.facodi_canonical_jobs (
 	id uuid primary key default gen_random_uuid(),
-	task_ref uuid not null,
+	task_ref text not null check (task_ref ~ '^task:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
 	company_id bigint not null check (company_id > 0),
 	cohort text not null check (cohort = 'p2'),
 	request_payload jsonb not null check (
@@ -38,7 +38,7 @@ grant usage, select on sequence pgmq.q_facodi_canonical_analysis_msg_id_seq
 	to service_role;
 
 create function public.facodi_canonical_enqueue(
-	p_task_ref uuid, p_company_id bigint, p_cohort text, p_request jsonb
+	p_task_ref text, p_company_id bigint, p_cohort text, p_request jsonb
 ) returns jsonb language plpgsql security invoker set search_path = '' as $$
 declare
 	job public.facodi_canonical_jobs;
@@ -62,7 +62,7 @@ begin
 	end if;
 	return jsonb_build_object('job_id', job.id, 'task_ref', job.task_ref,
 		'company_id', job.company_id, 'cohort', job.cohort,
-		'revision', job.revision, 'status', job.status, 'result', job.result);
+		'revision', job.revision, 'status', job.status, 'result', job.result, 'attempt', job.attempt);
 end;
 $$;
 
@@ -151,16 +151,32 @@ begin
 	end if;
 	return jsonb_build_object('job_id', job.id, 'task_ref', job.task_ref,
 		'company_id', job.company_id, 'cohort', job.cohort,
-		'revision', job.revision, 'status', job.status, 'result', job.result);
+		'revision', job.revision, 'status', job.status, 'result', job.result, 'attempt', job.attempt);
 end;
 $$;
 
-revoke all on function public.facodi_canonical_enqueue(uuid, bigint, text, jsonb),
+create function public.facodi_canonical_receipt(
+	p_job_id uuid, p_task_ref text, p_company_id bigint, p_cohort text
+) returns jsonb language sql security invoker set search_path = '' as $$
+	select jsonb_build_object('job_id', id, 'task_ref', task_ref,
+		'company_id', company_id, 'cohort', cohort, 'revision', revision,
+		'status', status, 'result', result, 'attempt', attempt)
+	from public.facodi_canonical_jobs
+	where id = p_job_id and task_ref = p_task_ref
+		and company_id = p_company_id and cohort = p_cohort;
+$$;
+
+revoke all on function public.facodi_canonical_receipt(uuid, text, bigint, text)
+	from public, anon, authenticated;
+grant execute on function public.facodi_canonical_receipt(uuid, text, bigint, text)
+	to service_role;
+
+revoke all on function public.facodi_canonical_enqueue(text, bigint, text, jsonb),
 	public.facodi_canonical_claim(),
 	public.facodi_canonical_checkpoint(uuid, uuid, text, jsonb),
 	public.facodi_canonical_finish(uuid, uuid, text, jsonb)
 	from public, anon, authenticated;
-grant execute on function public.facodi_canonical_enqueue(uuid, bigint, text, jsonb),
+grant execute on function public.facodi_canonical_enqueue(text, bigint, text, jsonb),
 	public.facodi_canonical_claim(),
 	public.facodi_canonical_checkpoint(uuid, uuid, text, jsonb),
 	public.facodi_canonical_finish(uuid, uuid, text, jsonb) to service_role;

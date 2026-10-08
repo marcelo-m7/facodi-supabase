@@ -28,7 +28,7 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
             "pgmq.q_facodi_canonical_analysis, pgmq.a_facodi_canonical_analysis",
             role="postgres",
         )
-        self.task_ref = str(uuid4())
+        self.task_ref = "task:" + str(uuid4())
 
     def enqueue(self, payload='{"source_url":"https://example.org/test"}'):
         return json.loads(self.sql(
@@ -122,7 +122,7 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
             self.checkpoint(job, '{"title":"Replacement"}')
         with self.assertRaises(subprocess.CalledProcessError):
             self.sql(
-                "select public.facodi_canonical_enqueue(gen_random_uuid(), 1, 'p2', "
+                "select public.facodi_canonical_enqueue('task:' || gen_random_uuid()::text, 1, 'p2', "
                 "jsonb_build_object('text', repeat('x', 65536)))"
             )
 
@@ -131,11 +131,25 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
             for query in (
                 "select * from public.facodi_canonical_jobs",
                 "select public.facodi_canonical_claim()",
+                "select public.facodi_canonical_receipt(gen_random_uuid(), 'task:' || gen_random_uuid()::text, 1, 'p2')",
                 "select * from pgmq.q_facodi_canonical_analysis",
             ):
                 with self.subTest(role=role, query=query):
                     with self.assertRaises(subprocess.CalledProcessError):
                         self.sql(query, role=role)
+
+    def test_receipt_requires_all_native_identity_dimensions(self):
+        accepted = self.enqueue()
+        query = "select public.facodi_canonical_receipt('%s', '%s', %s, '%s')"
+        values = (accepted['job_id'], self.task_ref, 1, 'p2')
+        self.assertEqual(json.loads(self.sql(query % values)), accepted)
+        for changed in [(str(uuid4()), self.task_ref, 1, 'p2'),
+                        (accepted['job_id'], 'task:' + str(uuid4()), 1, 'p2'),
+                        (accepted['job_id'], self.task_ref, 2, 'p2'),
+                        (accepted['job_id'], self.task_ref, 1, 'legacy')]:
+            self.assertEqual(self.sql(query % changed), '')
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql("select public.facodi_canonical_enqueue('%s', 1, 'p2', '{}')" % uuid4())
 
 
 if __name__ == "__main__":

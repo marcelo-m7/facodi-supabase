@@ -45,8 +45,9 @@ tests/
 - `v3_discover_resource_metadata`: privileged metadata-only discovery used by the public Odoo contribution form through a server-side proxy. It never runs Gemini analysis and never persists publication decisions.
 - `v3_ingest_youtube_video`: privileged, metadata-only YouTube ingest. It normalizes identity, stores idempotent processing evidence in `public.facodi_processing_jobs`, and never publishes Odoo content.
 - `v2_ingest_youtube_video`: temporary compatibility alias that executes the same FACODI-native v3 ingest contract. It exists only so older callers can migrate without depending on Open2.
+- `v4_canonical_analysis`: additive, disabled-worker candidate for bounded durable text analysis; submit and receipt endpoints use the canonical queue, not the old v3 jobs.
 
-All four endpoints use modern Supabase secret-key authentication inside the function with `verify_jwt=false`; callers send the secret only on the `apikey` header. The browser never receives a secret key.
+All endpoints use modern Supabase secret-key authentication inside the function with `verify_jwt=false`; callers send the secret only on the `apikey` header. The browser never receives a secret key. The v4 wrapper uses pinned `@supabase/server` secret authentication; existing v3 implementations are unchanged.
 
 The Open2-only surfaces `v2_process_video_pipeline`, `v2_sync_object_to_odoo`, and `v2_push_odoo_learning_object` are not FACODI runtime functions and must not be deployed from this repository.
 
@@ -59,17 +60,34 @@ The additive `facodi_canonical_queue` migration introduces an isolated logged
 rows are unchanged. Only `service_role` can access the new boundary functions;
 Public and authenticated clients have no table or RPC access.
 
-Enqueue is atomic with the queue message and scoped by company plus native task
-UUID. Identical replay returns the accepted UUID; changed payload/cohort fails
+Enqueue is atomic with the queue message and scoped by company plus native
+`task:<uuid>` reference. Identical replay returns the accepted job UUID; changed payload/cohort fails
 closed. Claims have a 120-second visibility lease and a new fencing token per
 attempt. Immutable metadata/analysis checkpoints survive recovery. Terminal
 receipts are monotonic, replayable and never publish Odoo content.
 
-This is a database protocol candidate, not an activated analysis pipeline.
-Worker scheduling, authenticated transport, API dispatch/reconciliation and
-Learning cutover still require integrated acceptance. Do not activate new Odoo
-intake merely because this schema is installed. Native database tests and local
-lint/security checks are mandatory in CI before promotion.
+The candidate includes bounded submit/receipt transport and a `/work` endpoint.
+Worker execution requires `FACODI_CANONICAL_WORKER_ENABLED=true`; it is disabled
+by default. Manual/Markdown text and explicit YouTube transcripts are limited to
+12000 UTF-8 bytes. Source acquisition, binary documents, accepted catalog mapping
+and versioned commands are not yet cut over. No input is silently truncated.
+
+The worker preserves the accepted lexical baseline or structured Gemini model,
+evidence schema and output-token budget. Missing Gemini credentials fail closed;
+v3 metadata fallback is not a substitute. Gemini uses server-only
+`FACODI_ENRICHMENT_API_KEY`, a bounded deadline and no redirects. At most two
+claims may invoke analysis; later claims can only finish an already persisted
+analysis checkpoint. Outputs are bounded before persistence. Scheduling and
+full provider/source parity remain acceptance requirements, not implied by this
+endpoint.
+
+Local evidence: eight real database tests and eighteen Deno tests, including the
+actual secret-auth wrapper and Supabase client over native SQL transactions.
+They prove terminal replay, role/scope denial, crash fencing, saved-checkpoint
+recovery, input/output/cost bounds and no publication. CI makes native execution
+mandatory and freezes the dependency lock. No remote migration/function or Odoo
+intake activation has been performed. Final API/Learning integration, runtime
+image identity and private canary remain required before activation.
 
 1. Treat the FACODI project and `docs/current-facodi-runtime.md` as the source of truth.
 2. Use Git history only when historical Open2 provenance is explicitly needed.
