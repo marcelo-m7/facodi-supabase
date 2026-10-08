@@ -46,5 +46,6 @@ jobs:
         run: |
           docker exec "$FACODI_CANONICAL_TEST_CONTAINER" createdb -U postgres facodi_canonical_ci
           docker exec -i "$FACODI_CANONICAL_TEST_CONTAINER" psql -X -v ON_ERROR_STOP=1 -U postgres -d facodi_canonical_ci < supabase/migrations/*_facodi_canonical_queue.sql
+          docker exec -i "$FACODI_CANONICAL_TEST_CONTAINER" psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d facodi_canonical_ci < supabase/migrations/*_facodi_canonical_commands.sql
           python3 -m unittest discover -s tests -p 'test_canonical_queue.py' -v
           npx --yes deno@2.9.6 test --frozen --allow-env --allow-run=docker tests/canonical_worker_test.ts

@@ -61,6 +61,17 @@ export async function canonicalTransport(req: Request, rpc: CanonicalRpc): Promi
       if (!receipt) throw new HttpError(404, "receipt_not_found");
       return json({ receipt });
     }
+    if (body.action === "cancel" && typeof body.job_id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.job_id) &&
+        typeof body.command_id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.command_id) &&
+        Number.isSafeInteger(body.expected_revision) && Number(body.expected_revision) >= 0) {
+      const response = await rpc("facodi_canonical_cancel", {
+        ...scope, p_job_id: body.job_id, p_command_id: body.command_id,
+        p_expected_revision: body.expected_revision,
+      });
+      return json(response);
+    }
     throw new HttpError(400, "invalid_action");
   });
 }

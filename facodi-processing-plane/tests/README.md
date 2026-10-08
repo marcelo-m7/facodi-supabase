@@ -3,14 +3,19 @@
 `test_current_runtime.py` preserves the explicit FACODI v3 function inventory
 and excludes retired Open2 surfaces.
 
-`test_canonical_queue.py` executes seven native PostgreSQL tests: twenty real
+`test_canonical_queue.py` executes thirteen native PostgreSQL tests: twenty real
 concurrent enqueues, twenty independent claims, caller rollback, expired-lease
 recovery/fencing, immutable checkpoint replay, terminal response loss/replay,
-payload bounds and Public/authenticated denial. It uses `docker exec` against
+payload bounds and Public/authenticated denial. Versioned cancellation adds
+twenty concurrent command replays racing a live completion, rollback, command
+identity conflicts, append-only receipt history and residual-message fencing.
+`canonical_worker_test.ts` executes 27 Deno tests, including the actual secret
+authentication wrapper/client against native SQL for unpublished completion and
+versioned cancellation replay. It uses `docker exec` against
 only a disposable local container and the fixed `facodi_canonical_ci` database.
 It never connects to remote Supabase or production Odoo.
 
-After starting local Supabase PostgreSQL and loading the candidate migration in
+After starting local Supabase PostgreSQL and loading the queue and command migrations in
 that dedicated test database:
 
 ```bash

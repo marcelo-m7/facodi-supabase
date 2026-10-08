@@ -24,7 +24,7 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
 
     def setUp(self):
         self.sql(
-            "truncate public.facodi_canonical_jobs, "
+            "truncate public.facodi_canonical_commands, public.facodi_canonical_jobs, "
             "pgmq.q_facodi_canonical_analysis, pgmq.a_facodi_canonical_analysis",
             role="postgres",
         )
@@ -60,6 +60,106 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
             f"interval '1 second' where msg_id = {job['queue_message_id']}",
             role="postgres",
         )
+
+    def test_versioned_cancel_replays_and_fences_the_previous_worker(self):
+        accepted = self.enqueue()
+        job = self.claim()
+        command_id = str(uuid4())
+        query = (
+            "select public.facodi_canonical_cancel("
+            f"'{job['id']}', '{self.task_ref}', 1, 'p2', '{command_id}', 0)"
+        )
+        cancelled = json.loads(self.sql(query))
+        self.assertEqual(cancelled['receipt']['status'], 'cancelled')
+        self.assertEqual(cancelled['receipt']['job_id'], accepted['job_id'])
+        self.assertEqual(cancelled['command_revision'], 1)
+        self.assertEqual(json.loads(self.sql(query)), cancelled)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.checkpoint(job)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.finish(job)
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '0')
+
+    def test_cancel_rejects_scope_and_command_revision_without_mutation(self):
+        accepted = self.enqueue()
+        for company_id, revision in [(2, 0), (1, 1), (1, -1)]:
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.sql(
+                    "select public.facodi_canonical_cancel("
+                    f"'{accepted['job_id']}', '{self.task_ref}', {company_id}, 'p2', '{uuid4()}', {revision})"
+                )
+        self.assertEqual(self.sql('select status from public.facodi_canonical_jobs'), 'queued')
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '1')
+
+    def test_cancel_rollback_and_command_identity_preserve_the_prior_receipt(self):
+        self.enqueue()
+        job = self.claim()
+        self.checkpoint(job)
+        command_id = str(uuid4())
+        query = (
+            "select public.facodi_canonical_cancel("
+            f"'{job['id']}', '{self.task_ref}', 1, 'p2', '{command_id}', 0)"
+        )
+        self.sql(f"begin; {query}; rollback")
+        self.assertEqual(self.sql('select status from public.facodi_canonical_jobs'), 'processing')
+        self.assertEqual(self.sql('select count(*) from public.facodi_canonical_commands'), '0')
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '1')
+        first = json.loads(self.sql(query))
+        prior = json.loads(self.sql('select prior_receipt from public.facodi_canonical_commands'))
+        self.assertEqual(prior['status'], 'processing')
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql(query[:-2] + '1)')
+        self.task_ref = 'task:' + str(uuid4())
+        other = self.enqueue()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql(
+                "select public.facodi_canonical_cancel("
+                f"'{other['job_id']}', '{self.task_ref}', 1, 'p2', '{command_id}', 0)"
+            )
+        self.assertEqual(json.loads(self.sql(query)), first)
+        self.assertEqual(self.sql('select count(*) from public.facodi_canonical_commands'), '1')
+        for mutation in ('update public.facodi_canonical_commands set response = \'{}\'',
+                         'delete from public.facodi_canonical_commands'):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.sql(mutation)
+
+    def test_real_concurrent_cancel_and_finish_keep_one_audited_cancellation(self):
+        self.enqueue()
+        job = self.claim()
+        query = (
+            "select public.facodi_canonical_cancel("
+            f"'{job['id']}', '{self.task_ref}', 1, 'p2', '{uuid4()}', 0)"
+        )
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            finishing = executor.submit(self.finish, job)
+            responses = list(executor.map(lambda _: self.sql(query), range(20)))
+            try:
+                finishing.result()
+            except subprocess.CalledProcessError as error:
+                self.assertIn('stale_claim', error.stderr)
+        self.assertEqual(len(set(responses)), 1)
+        self.assertEqual(self.sql('select status from public.facodi_canonical_jobs'), 'cancelled')
+        self.assertEqual(self.sql('select count(*) from public.facodi_canonical_commands'), '1')
+        self.assertEqual(self.sql('select count(*) from pgmq.a_facodi_canonical_analysis'), '1')
+        prior = json.loads(self.sql('select prior_receipt from public.facodi_canonical_commands'))
+        self.assertIn(prior['status'], ('processing', 'needs_review'))
+        self.assertIsNone(self.claim())
+
+    def test_cancelled_job_with_residual_message_never_runs(self):
+        accepted = self.enqueue()
+        cancelled = json.loads(self.sql(
+            "select public.facodi_canonical_cancel("
+            f"'{accepted['job_id']}', '{self.task_ref}', 1, 'p2', '{uuid4()}', 0)"
+        ))
+        self.sql("select pgmq.send('facodi_canonical_analysis', "
+                 f"jsonb_build_object('job_id', '{accepted['job_id']}'))")
+        self.assertIsNone(self.claim())
+        current = json.loads(self.sql(
+            "select public.facodi_canonical_receipt("
+            f"'{accepted['job_id']}', '{self.task_ref}', 1, 'p2')"
+        ))
+        self.assertEqual(current, cancelled['receipt'])
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '0')
 
     def test_real_concurrent_enqueue_has_one_job_and_one_message(self):
         with ThreadPoolExecutor(max_workers=8) as executor:
@@ -130,6 +230,8 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
         for role in ("anon", "authenticated"):
             for query in (
                 "select * from public.facodi_canonical_jobs",
+                "select * from public.facodi_canonical_commands",
+                "select public.facodi_canonical_cancel(gen_random_uuid(), 'task:' || gen_random_uuid()::text, 1, 'p2', gen_random_uuid(), 0)",
                 "select public.facodi_canonical_claim()",
                 "select public.facodi_canonical_receipt(gen_random_uuid(), 'task:' || gen_random_uuid()::text, 1, 'p2')",
                 "select * from pgmq.q_facodi_canonical_analysis",

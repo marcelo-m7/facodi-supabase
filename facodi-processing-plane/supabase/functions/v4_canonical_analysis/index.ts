@@ -9,7 +9,8 @@ export default {
   fetch: withSupabase({ auth: "secret:*" }, async (req, ctx) => {
     const rpc: CanonicalRpc = async (name, values) => {
       const { data, error } = await ctx.supabaseAdmin.rpc(name, values).abortSignal(AbortSignal.timeout(10000));
-      if (error) throw new HttpError(error.code === "22023" ? 409 : 503, "canonical_boundary_failed");
+      if (error) throw new HttpError(error.code === "P0002" ? 404 :
+        ["22023", "40001"].includes(error.code) ? 409 : 503, "canonical_boundary_failed");
       return data;
     };
     if (new URL(req.url).pathname.endsWith("/work")) {

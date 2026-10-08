@@ -99,6 +99,28 @@ Deno.test("catalog worker checkpoint recovery preserves mapping identity without
   assert(result.mapping_data?.enriched_document_id === result.enriched_data.id);
 });
 
+Deno.test("transport cancels only a scoped versioned command", async () => {
+  const test = fixture();
+  const body = { action: "cancel", task_ref: test.job.task_ref, company_id: 1, cohort: "p2",
+    job_id: test.job.id, command_id: crypto.randomUUID(), expected_revision: 0 };
+  let calls = 0;
+  const response = await canonicalTransport(new Request("https://boundary.test", { method: "POST",
+    body: JSON.stringify(body) }), async (name, values) => {
+      calls++;
+      assert(name === "facodi_canonical_cancel" && values?.p_task_ref === body.task_ref);
+      assert(values?.p_command_id === body.command_id && values?.p_expected_revision === 0);
+      return { receipt: { status: "cancelled" }, command_revision: 1 };
+    });
+  assert(response.status === 200 && (await response.json()).command_revision === 1 && calls === 1);
+  for (const changed of [{ command_id: "forged" }, { expected_revision: -1 },
+    { expected_revision: true }, { expected_revision: "0" }, { job_id: "forged" },
+    { cohort: "legacy" }, { company_id: 0 }]) {
+    const rejected = await canonicalTransport(new Request("https://boundary.test", { method: "POST",
+      body: JSON.stringify({ ...body, ...changed }) }), async () => { throw new Error("must not mutate"); });
+    assert(rejected.status === 400);
+  }
+});
+
 Deno.test("transport rejects a catalog from another company without accepting a job", async () => {
   const test = fixture();
   test.job.request_payload.catalog_snapshot = catalogFixture();
@@ -365,8 +387,8 @@ Deno.test({
       const text = new TextDecoder().decode(output.stdout).trim();
       return text ? JSON.parse(text) : null;
     };
-    await sql("truncate public.facodi_canonical_jobs, pgmq.q_facodi_canonical_analysis, pgmq.a_facodi_canonical_analysis;", {}, "postgres");
-    const functions = new Set(["facodi_canonical_enqueue", "facodi_canonical_claim", "facodi_canonical_checkpoint", "facodi_canonical_finish", "facodi_canonical_receipt"]);
+    await sql("truncate public.facodi_canonical_commands, public.facodi_canonical_jobs, pgmq.q_facodi_canonical_analysis, pgmq.a_facodi_canonical_analysis;", {}, "postgres");
+    const functions = new Set(["facodi_canonical_enqueue", "facodi_canonical_claim", "facodi_canonical_checkpoint", "facodi_canonical_finish", "facodi_canonical_receipt", "facodi_canonical_cancel"]);
     const originalFetch = globalThis.fetch;
     const environment = { SUPABASE_URL: "http://127.0.0.1:54321", SUPABASE_SECRET_KEY: "sb_secret_disposable_test",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_disposable_test", FACODI_CANONICAL_WORKER_ENABLED: "true" };
@@ -407,6 +429,16 @@ Deno.test({
       assert(await sql("select count(*) from public.facodi_canonical_jobs;") === 1);
       assert(await sql("select count(*) from pgmq.q_facodi_canonical_analysis;") === 0);
       assert(await sql("select count(*) from pgmq.a_facodi_canonical_analysis;") === 1);
+      const cancel = { action: "cancel", task_ref: test.job.task_ref, company_id: 1, cohort: "p2",
+        job_id: first.job_id, command_id: crypto.randomUUID(), expected_revision: 0 };
+      const withdrawn = await call("", cancel);
+      assert(withdrawn.status === 200);
+      const command = await withdrawn.json();
+      assert(command.command_id === cancel.command_id && command.command_revision === 1);
+      assert(command.receipt.status === "cancelled" && command.receipt.revision > completed.revision);
+      assert(JSON.stringify(await (await call("", cancel)).json()) === JSON.stringify(command));
+      assert(JSON.stringify(await sql("select prior_receipt from public.facodi_canonical_commands;")) === JSON.stringify(completed));
+      assert(await sql("select count(*) from public.facodi_canonical_commands;") === 1);
     } finally {
       globalThis.fetch = originalFetch;
       for (const [key, value] of Object.entries(previous)) {
