@@ -77,11 +77,12 @@ evidence schema and output-token budget. Missing Gemini credentials fail closed;
 v3 metadata fallback is not a substitute. Gemini uses server-only
 `FACODI_ENRICHMENT_API_KEY`, a bounded deadline and no redirects. At most two
 claims may invoke analysis; later claims can only finish an already persisted
-analysis checkpoint. Outputs are bounded before persistence. Scheduling and
+analysis checkpoint. A new analysis requires 75 seconds of live lease and each
+RPC has a 10-second deadline. Outputs are bounded before persistence. Scheduling and
 full provider/source parity remain acceptance requirements, not implied by this
 endpoint.
 
-Local evidence: eight real database tests and eighteen Deno tests, including the
+Local evidence: eight real database tests and nineteen Deno tests, including the
 actual secret-auth wrapper and Supabase client over native SQL transactions.
 They prove terminal replay, role/scope denial, crash fencing, saved-checkpoint
 recovery, input/output/cost bounds and no publication. CI makes native execution
