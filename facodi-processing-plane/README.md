@@ -52,6 +52,25 @@ The Open2-only surfaces `v2_process_video_pipeline`, `v2_sync_object_to_odoo`, a
 
 ## Workflow
 
+### INC-P2 Durable Queue Candidate
+
+The additive `facodi_canonical_queue` migration introduces an isolated logged
+`pgmq` queue and `facodi_canonical_jobs`. Existing v3 functions and processing
+rows are unchanged. Only `service_role` can access the new boundary functions;
+Public and authenticated clients have no table or RPC access.
+
+Enqueue is atomic with the queue message and scoped by company plus native task
+UUID. Identical replay returns the accepted UUID; changed payload/cohort fails
+closed. Claims have a 120-second visibility lease and a new fencing token per
+attempt. Immutable metadata/analysis checkpoints survive recovery. Terminal
+receipts are monotonic, replayable and never publish Odoo content.
+
+This is a database protocol candidate, not an activated analysis pipeline.
+Worker scheduling, authenticated transport, API dispatch/reconciliation and
+Learning cutover still require integrated acceptance. Do not activate new Odoo
+intake merely because this schema is installed. Native database tests and local
+lint/security checks are mandatory in CI before promotion.
+
 1. Treat the FACODI project and `docs/current-facodi-runtime.md` as the source of truth.
 2. Use Git history only when historical Open2 provenance is explicitly needed.
 3. Implement new mechanisms directly against the current FACODI schema and secret-key contract.
