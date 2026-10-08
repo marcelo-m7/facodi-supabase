@@ -3,6 +3,7 @@ import type { ResourceMetadata } from "../supabase/functions/_shared/v3_youtube.
 import { baselineText, chunkText, enrichCanonicalText, validateEnrichedText } from "../supabase/functions/_shared/canonical_enrichment.ts";
 import { canonicalTransport } from "../supabase/functions/_shared/canonical_transport.ts";
 import endpoint from "../supabase/functions/v4_canonical_analysis/index.ts";
+import { mapAcceptedCatalog, validateAcceptedCatalog, verifyAcceptedCatalog, type AcceptedCatalog } from "../supabase/functions/_shared/canonical_mapping.ts";
 
 function assert(value: unknown, message = "assertion failed"): asserts value {
   if (!value) throw new Error(message);
@@ -45,6 +46,98 @@ Deno.test("fresh worker persists each checkpoint before an unpublished terminal 
   assert(test.calls.join(",") === "metadata,checkpoint:metadata,analyze,checkpoint:analysis,needs_review");
   assert((result.document_data as { text_content: string }).text_content === test.job.request_payload.raw_content);
   assert(!("publication" in result));
+});
+
+function catalogFixture(): AcceptedCatalog {
+  return { snapshot_id: "catalog-1-" + "1".repeat(20),
+    snapshot_hash: "b492986eb79376c90716679f3723f3d38b8ac49bc8932f226fcc38ed43c752b6",
+    created_at: "2026-10-08T00:00:00", schema_version: "2.0.0",
+    metadata: { company_id: 1, website_id: 1, ranking: "lexical score; not calibrated probability" },
+    targets: ["Statistics", "Algebra", "Evidence"].map((name, index) => ({
+      id: `channel_${index + 1}`, name, type: "course", code: null, description: null,
+      tags: index === 0 ? ["Probability"] : index === 1 ? ["Algebra"] : [], topics: [],
+      metadata: { model: "slide.channel", res_id: index + 1, website_id: 1, company_id: 1 },
+    })) };
+}
+
+Deno.test("catalog fingerprint preserves Python Unicode, astral and control escaping", async () => {
+  const catalog = catalogFixture();
+  catalog.targets[0].name = "Stat\u00edstics \ud83d\ude00";
+  catalog.targets[0].description = "\u007f\n\t\b";
+  catalog.snapshot_hash = "ec197d9ee1306fcddf2351bb9f7dc68c1a0c70e2bb1b8a7a39d86f2c91315e37";
+  await verifyAcceptedCatalog(validateAcceptedCatalog(catalog, 1));
+});
+
+Deno.test("accepted catalog matching preserves native scores, threshold, ties and unmatched concepts", () => {
+  const test = fixture();
+  const document = { ...test.analysis.enriched_data,
+    summary: "Statistics supports evidence and algebra.", topics: ["Probability"],
+    concepts: ["Statistics", "Algebra", "Missing"].map((name) => ({ name, category: "Keyword",
+      relevance: 0.5, evidence_snippet: name, chunk_indices: [1] })) };
+  const catalog = validateAcceptedCatalog(catalogFixture(), 1);
+  const result = mapAcceptedCatalog(document, catalog, "accepted-document");
+  assert(result.candidates.map((candidate) => candidate.target_id).join(",") === "channel_1,channel_2");
+  assert(result.candidates.every((candidate) => candidate.score === 0.75 && candidate.confidence === 0.75));
+  assert(result.unmatched_concepts.join(",") === "Missing");
+  assert(result.snapshot_hash === catalog.snapshot_hash && result.ranking_algorithm_version === "deterministic-v2");
+  catalog.targets = Array.from({ length: 7 }, (_, index) => ({ ...catalog.targets[1],
+    id: `channel_${index + 1}`, metadata: { ...catalog.targets[1].metadata, res_id: index + 1 } }));
+  assert(mapAcceptedCatalog(document, catalog, "accepted-document").candidates.map((candidate) =>
+    candidate.target_id).join(",") === "channel_1,channel_2,channel_3,channel_4,channel_5");
+});
+
+Deno.test("catalog worker checkpoint recovery preserves mapping identity without another paid call", async () => {
+  const test = fixture();
+  test.job.request_payload.catalog_snapshot = catalogFixture();
+  await processCanonicalJob(test.boundary);
+  const accepted = JSON.stringify(test.analysis.mapping_data);
+  test.job.attempt = 4;
+  test.job.checkpoint = { metadata: test.metadata, analysis: test.analysis };
+  test.calls.length = 0;
+  const result = await processCanonicalJob(test.boundary) as AnalysisCheckpoint;
+  assert(JSON.stringify(result.mapping_data) === accepted && test.calls.join(",") === "needs_review");
+  assert(result.mapping_data?.enriched_document_id === result.enriched_data.id);
+});
+
+Deno.test("transport rejects a catalog from another company without accepting a job", async () => {
+  const test = fixture();
+  test.job.request_payload.catalog_snapshot = catalogFixture();
+  const response = await canonicalTransport(new Request("https://boundary.test", { method: "POST",
+    body: JSON.stringify({ action: "submit", task_ref: test.job.task_ref, company_id: 2, cohort: "p2",
+      request: test.job.request_payload }) }), async () => { throw new Error("No queue side effects"); });
+  assert(response.status === 400);
+});
+
+Deno.test("mapping checkpoint with a different enriched document fails without another paid call", async () => {
+  const test = fixture();
+  test.job.request_payload.catalog_snapshot = catalogFixture();
+  await processCanonicalJob(test.boundary);
+  test.analysis.mapping_data!.enriched_document_id = crypto.randomUUID();
+  test.job.attempt = 4;
+  test.job.checkpoint = { metadata: test.metadata, analysis: test.analysis };
+  test.calls.length = 0;
+  const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+  assert(result.error_code === "INVALID_MAPPING_CHECKPOINT" && test.calls.join(",") === "failed");
+});
+
+Deno.test("changed catalog text cannot reuse an accepted native fingerprint", async () => {
+  const test = fixture();
+  test.job.request_payload.catalog_snapshot = catalogFixture();
+  test.job.request_payload.catalog_snapshot.targets[0].name = "Renamed after acceptance";
+  const response = await canonicalTransport(new Request("https://boundary.test", { method: "POST",
+    body: JSON.stringify({ action: "submit", task_ref: test.job.task_ref, company_id: 1, cohort: "p2",
+      request: test.job.request_payload }) }), async () => { throw new Error("No queue side effects"); });
+  assert(response.status === 400);
+  const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+  assert(result.error_code === "INVALID_ACCEPTED_REQUEST" && test.calls.join(",") === "failed");
+});
+
+Deno.test("cross-company catalog is rejected before acquisition or paid analysis", async () => {
+  const test = fixture();
+  test.job.request_payload.catalog_snapshot = catalogFixture();
+  test.job.request_payload.catalog_snapshot.metadata.company_id = 2;
+  const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+  assert(result.error_code === "INVALID_ACCEPTED_REQUEST" && test.calls.join(",") === "failed");
 });
 
 Deno.test("recovery reuses committed checkpoints without another provider call", async () => {
@@ -292,6 +385,7 @@ Deno.test({
         return Response.json(value);
       }) as typeof fetch;
       const test = fixture();
+      test.job.request_payload.catalog_snapshot = catalogFixture();
       const call = (path: string, body: unknown) => endpoint.fetch(new Request(`${environment.SUPABASE_URL}/v4${path}`, {
         method: "POST", headers: { apikey: environment.SUPABASE_SECRET_KEY }, body: JSON.stringify(body),
       }));
@@ -305,6 +399,9 @@ Deno.test({
       assert(completed.job_id === first.job_id && completed.status === "needs_review" && completed.attempt === 1);
       assert(completed.result.document_data.text_content === test.job.request_payload.raw_content);
       assert(completed.result.enriched_data.provider_name === "baseline-deterministic");
+      assert(completed.result.mapping_data.snapshot_hash === test.job.request_payload.catalog_snapshot.snapshot_hash);
+      assert(completed.result.mapping_data.enriched_document_id === completed.result.enriched_data.id);
+      assert(!("publication" in completed.result));
       const replay = (await (await call("", submit)).json()).receipt;
       assert(JSON.stringify(replay) === JSON.stringify(completed));
       assert(await sql("select count(*) from public.facodi_canonical_jobs;") === 1);

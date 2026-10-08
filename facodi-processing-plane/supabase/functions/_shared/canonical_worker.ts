@@ -1,6 +1,7 @@
 import { HttpError } from "./http.ts";
 import { extractYouTubeVideoId, type ResourceMetadata } from "./v3_youtube.ts";
 import type { EnrichedText, TextChunk } from "./canonical_enrichment.ts";
+import { mapAcceptedCatalog, validateAcceptedCatalog, verifyAcceptedCatalog, type AcceptedCatalog } from "./canonical_mapping.ts";
 
 export interface CanonicalRequest {
   source_type: "manual" | "markdown" | "youtube";
@@ -8,6 +9,7 @@ export interface CanonicalRequest {
   title: string;
   raw_content: string;
   language: string;
+  catalog_snapshot?: AcceptedCatalog;
   provider_config: { provider: "baseline" | "gemini"; version: string; model?: string; max_output_tokens?: number };
 }
 
@@ -27,6 +29,7 @@ export interface AnalysisCheckpoint {
   enriched_data: EnrichedText;
   chunks: TextChunk[];
   document_data: { text_content: string; language: string };
+  mapping_data?: ReturnType<typeof mapAcceptedCatalog>;
 }
 
 export interface WorkerBoundary {
@@ -37,12 +40,12 @@ export interface WorkerBoundary {
   analyze(metadata: ResourceMetadata, request: CanonicalRequest): Promise<AnalysisCheckpoint>;
 }
 
-export function validateCanonicalRequest(value: unknown): CanonicalRequest {
+export function validateCanonicalRequest(value: unknown, companyId?: number): CanonicalRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new HttpError(400, "invalid_canonical_request");
   }
   const request = value as CanonicalRequest;
-  const allowed = new Set(["source_type", "source_url", "title", "raw_content", "language", "provider_config"]);
+  const allowed = new Set(["source_type", "source_url", "title", "raw_content", "language", "provider_config", "catalog_snapshot"]);
   if (Object.keys(request).some((key) => !allowed.has(key)) ||
       !["manual", "markdown", "youtube"].includes(request.source_type) ||
       [request.source_url, request.title, request.raw_content, request.language].some((field) => typeof field !== "string") ||
@@ -74,6 +77,7 @@ export function validateCanonicalRequest(value: unknown): CanonicalRequest {
   } else if (request.source_url) {
     throw new HttpError(400, "invalid_canonical_source");
   }
+  if (request.catalog_snapshot !== undefined) validateAcceptedCatalog(request.catalog_snapshot, companyId);
   return request;
 }
 
@@ -82,7 +86,8 @@ export async function processCanonicalJob(boundary: WorkerBoundary): Promise<unk
   if (!job) return { idle: true };
   let request: CanonicalRequest;
   try {
-    request = validateCanonicalRequest(job.request_payload);
+    request = validateCanonicalRequest(job.request_payload, job.company_id);
+    if (request.catalog_snapshot) await verifyAcceptedCatalog(request.catalog_snapshot);
   } catch (_error) {
     return await boundary.finish(job, "failed", { error_code: "INVALID_ACCEPTED_REQUEST" });
   }
@@ -103,6 +108,10 @@ export async function processCanonicalJob(boundary: WorkerBoundary): Promise<unk
       throw new HttpError(503, "INSUFFICIENT_LEASE_BUDGET");
     }
     analysis = await boundary.analyze(metadata, request);
+    if (request.catalog_snapshot) {
+      analysis.enriched_data = { ...analysis.enriched_data, id: crypto.randomUUID() };
+      analysis.mapping_data = mapAcceptedCatalog(analysis.enriched_data, request.catalog_snapshot, analysis.enriched_data.id!);
+    }
     if (new TextEncoder().encode(JSON.stringify(analysis)).length > 60000) {
       return await boundary.finish(job, "failed", { error_code: "OUTPUT_BUDGET_EXHAUSTED" });
     }
@@ -112,6 +121,13 @@ export async function processCanonicalJob(boundary: WorkerBoundary): Promise<unk
     metadata,
     ...analysis,
   };
+  if (request.catalog_snapshot && (analysis.mapping_data?.snapshot_hash !== request.catalog_snapshot.snapshot_hash ||
+      analysis.mapping_data?.snapshot_id !== request.catalog_snapshot.snapshot_id ||
+      typeof analysis.enriched_data.id !== "string" || !analysis.enriched_data.id ||
+      analysis.mapping_data?.enriched_document_id !== analysis.enriched_data.id ||
+      analysis.mapping_data?.ranking_algorithm_version !== "deterministic-v2")) {
+    return await boundary.finish(job, "failed", { error_code: "INVALID_MAPPING_CHECKPOINT" });
+  }
   if (new TextEncoder().encode(JSON.stringify(result)).length > 60000) {
     return await boundary.finish(job, "failed", { error_code: "OUTPUT_BUDGET_EXHAUSTED" });
   }

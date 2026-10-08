@@ -1,5 +1,6 @@
 import { ensureMethod, HttpError, json, withHttp } from "./http.ts";
 import { validateCanonicalRequest } from "./canonical_worker.ts";
+import { verifyAcceptedCatalog } from "./canonical_mapping.ts";
 
 export type CanonicalRpc = (name: string, values?: Record<string, unknown>) => Promise<unknown>;
 
@@ -49,7 +50,8 @@ export async function canonicalTransport(req: Request, rpc: CanonicalRpc): Promi
     const body = await boundedBody(req);
     const scope = canonicalScope(body);
     if (body.action === "submit") {
-      const request = validateCanonicalRequest(body.request);
+      const request = validateCanonicalRequest(body.request, Number(body.company_id));
+      if (request.catalog_snapshot) await verifyAcceptedCatalog(request.catalog_snapshot);
       const receipt = await rpc("facodi_canonical_enqueue", { ...scope, p_request: request });
       return json({ receipt }, 202);
     }

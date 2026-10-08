@@ -17,6 +17,7 @@ export interface Concept {
 }
 
 export interface EnrichedText {
+  id?: string;
   summary: string;
   topics: string[];
   keywords: string[];

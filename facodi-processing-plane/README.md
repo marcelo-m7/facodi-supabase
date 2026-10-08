@@ -69,8 +69,20 @@ receipts are monotonic, replayable and never publish Odoo content.
 The candidate includes bounded submit/receipt transport and a `/work` endpoint.
 Worker execution requires `FACODI_CANONICAL_WORKER_ENABLED=true`; it is disabled
 by default. Manual/Markdown text and explicit YouTube transcripts are limited to
-12000 UTF-8 bytes. Source acquisition, binary documents, accepted catalog mapping
-and versioned commands are not yet cut over. No input is silently truncated.
+12000 UTF-8 bytes. Source acquisition, binary documents and versioned commands
+are not yet cut over. No input is silently truncated.
+
+Accepted requests may carry the frozen authorized native course catalog. Its
+company/Website scope and Python sorted-ASCII-JSON SHA-256 are validated before
+enqueue and before acquisition or paid analysis, including Unicode/control
+escaping. Mapping preserves native deterministic-v2 scores, thresholds, stable
+ties, top-five ranking and unmatched concepts. Evidence terms are sorted for
+stable output; Python set iteration is not claimed byte-identical. The mapping
+and enriched document identity are saved in one immutable analysis checkpoint.
+Recovery never repeats a paid call to regenerate mapping; inconsistent mapping
+identity fails for human review. Proposals never publish or approve content.
+Old immutable requests without catalog remain supported. Oversized catalogs
+are rejected by the bounded wire contract, not silently reduced.
 
 The worker preserves the accepted lexical baseline or structured Gemini model,
 evidence schema and output-token budget. Missing Gemini credentials fail closed;
@@ -82,7 +94,7 @@ RPC has a 10-second deadline. Outputs are bounded before persistence. Scheduling
 full provider/source parity remain acceptance requirements, not implied by this
 endpoint.
 
-Local evidence: eight real database tests and nineteen Deno tests, including the
+Local evidence: eight real database tests and twenty-six Deno tests, including the
 actual secret-auth wrapper and Supabase client over native SQL transactions.
 They prove terminal replay, role/scope denial, crash fencing, saved-checkpoint
 recovery, input/output/cost bounds and no publication. CI makes native execution
