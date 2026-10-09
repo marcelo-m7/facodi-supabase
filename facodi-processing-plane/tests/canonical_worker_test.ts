@@ -99,25 +99,27 @@ Deno.test("catalog worker checkpoint recovery preserves mapping identity without
   assert(result.mapping_data?.enriched_document_id === result.enriched_data.id);
 });
 
-Deno.test("transport cancels only a scoped versioned command", async () => {
+Deno.test("transport sends only scoped versioned cancellation and retry commands", async () => {
+  for (const action of ["cancel", "retry"]) {
   const test = fixture();
-  const body = { action: "cancel", task_ref: test.job.task_ref, company_id: 1, cohort: "p2",
+  const body = { action, task_ref: test.job.task_ref, company_id: 1, cohort: "p2",
     job_id: test.job.id, command_id: crypto.randomUUID(), expected_revision: 0 };
   let calls = 0;
   const response = await canonicalTransport(new Request("https://boundary.test", { method: "POST",
     body: JSON.stringify(body) }), async (name, values) => {
       calls++;
-      assert(name === "facodi_canonical_cancel" && values?.p_task_ref === body.task_ref);
+      assert(name === `facodi_canonical_${action}` && values?.p_task_ref === body.task_ref);
       assert(values?.p_command_id === body.command_id && values?.p_expected_revision === 0);
       return { receipt: { status: "cancelled" }, command_revision: 1 };
     });
   assert(response.status === 200 && (await response.json()).command_revision === 1 && calls === 1);
   for (const changed of [{ command_id: "forged" }, { expected_revision: -1 },
     { expected_revision: true }, { expected_revision: "0" }, { job_id: "forged" },
-    { cohort: "legacy" }, { company_id: 0 }]) {
+    { cohort: "legacy" }, { company_id: 0 }, { action: [action] }]) {
     const rejected = await canonicalTransport(new Request("https://boundary.test", { method: "POST",
       body: JSON.stringify({ ...body, ...changed }) }), async () => { throw new Error("must not mutate"); });
     assert(rejected.status === 400);
+  }
   }
 });
 
@@ -194,6 +196,27 @@ Deno.test("attempt budget terminates without another paid provider call", async 
   const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
   assert(result.error_code === "ATTEMPT_BUDGET_EXHAUSTED");
   assert(test.calls.join(",") === "failed");
+});
+
+Deno.test("explicit retry budget permits only its bounded additional claims", async () => {
+  const test = fixture();
+  test.job.attempt = 4;
+  test.job.analysis_attempt_limit = 5;
+  await processCanonicalJob(test.boundary);
+  assert(test.calls.join(",") === "metadata,checkpoint:metadata,analyze,checkpoint:analysis,needs_review");
+  test.job.attempt = 6;
+  test.calls.length = 0;
+  const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+  assert(result.error_code === "ATTEMPT_BUDGET_EXHAUSTED" && test.calls.join(",") === "failed");
+});
+
+Deno.test("invalid retry budget fails before acquisition or paid analysis", async () => {
+  for (const limit of [1, 21, 2.5, NaN, true, "4"]) {
+    const test = fixture();
+    test.job.analysis_attempt_limit = limit as number;
+    const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+    assert(result.error_code === "INVALID_ATTEMPT_BUDGET" && test.calls.join(",") === "failed");
+  }
 });
 
 Deno.test("insufficient lease budget never starts a paid provider call", async () => {
@@ -388,7 +411,7 @@ Deno.test({
       return text ? JSON.parse(text) : null;
     };
     await sql("truncate public.facodi_canonical_commands, public.facodi_canonical_jobs, pgmq.q_facodi_canonical_analysis, pgmq.a_facodi_canonical_analysis;", {}, "postgres");
-    const functions = new Set(["facodi_canonical_enqueue", "facodi_canonical_claim", "facodi_canonical_checkpoint", "facodi_canonical_finish", "facodi_canonical_receipt", "facodi_canonical_cancel"]);
+    const functions = new Set(["facodi_canonical_enqueue", "facodi_canonical_claim", "facodi_canonical_checkpoint", "facodi_canonical_finish", "facodi_canonical_receipt", "facodi_canonical_cancel", "facodi_canonical_retry"]);
     const originalFetch = globalThis.fetch;
     const environment = { SUPABASE_URL: "http://127.0.0.1:54321", SUPABASE_SECRET_KEY: "sb_secret_disposable_test",
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_disposable_test", FACODI_CANONICAL_WORKER_ENABLED: "true" };
@@ -439,6 +462,31 @@ Deno.test({
       assert(JSON.stringify(await (await call("", cancel)).json()) === JSON.stringify(command));
       assert(JSON.stringify(await sql("select prior_receipt from public.facodi_canonical_commands;")) === JSON.stringify(completed));
       assert(await sql("select count(*) from public.facodi_canonical_commands;") === 1);
+      const retrySubmit = { ...submit, task_ref: `task:${crypto.randomUUID()}` };
+      const retryJob = (await (await call("", retrySubmit)).json()).receipt;
+      const previousClaim = await sql("select public.facodi_canonical_claim();");
+      const { metadata, ...savedAnalysis } = completed.result;
+      for (const [key, value] of Object.entries({ metadata, analysis: savedAnalysis })) {
+        await sql("select public.facodi_canonical_checkpoint(:'p_job_id', :'p_token', :'p_key', :'p_value');",
+          { p_job_id: retryJob.job_id, p_token: previousClaim.claim_token, p_key: key, p_value: value });
+      }
+      const failed = await sql("select public.facodi_canonical_finish(:'p_job_id', :'p_token', 'failed', :'p_result');",
+        { p_job_id: retryJob.job_id, p_token: previousClaim.claim_token,
+          p_result: { error_code: "DISPOSABLE_CRASH_AFTER_CHECKPOINT" } });
+      const retry = { action: "retry", task_ref: retrySubmit.task_ref, company_id: 1, cohort: "p2",
+        job_id: retryJob.job_id, command_id: crypto.randomUUID(), expected_revision: 0 };
+      const retriedResponse = await call("", retry);
+      assert(retriedResponse.status === 200);
+      const retried = await retriedResponse.json();
+      assert(retried.command_id === retry.command_id && retried.command_revision === 1);
+      assert(retried.receipt.status === "queued" && retried.receipt.attempt === 1);
+      assert(JSON.stringify(await sql("select prior_receipt from public.facodi_canonical_commands where id=:'p_command_id';",
+        { p_command_id: retry.command_id })) === JSON.stringify(failed));
+      const recovered = (await (await call("/work", {})).json()).receipt;
+      assert(recovered.job_id === retryJob.job_id && recovered.attempt === 2 && recovered.status === "needs_review");
+      assert(JSON.stringify(recovered.result) === JSON.stringify(completed.result));
+      assert(JSON.stringify(await (await call("", retry)).json()) === JSON.stringify(retried));
+      assert(await sql("select count(*) from public.facodi_canonical_commands;") === 2);
     } finally {
       globalThis.fetch = originalFetch;
       for (const [key, value] of Object.entries(previous)) {

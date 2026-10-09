@@ -19,6 +19,7 @@ export interface CanonicalJob {
   company_id: number;
   cohort: string;
   attempt: number;
+  analysis_attempt_limit?: number;
   claim_token: string;
   lease_until: string;
   request_payload: CanonicalRequest;
@@ -91,7 +92,11 @@ export async function processCanonicalJob(boundary: WorkerBoundary): Promise<unk
   } catch (_error) {
     return await boundary.finish(job, "failed", { error_code: "INVALID_ACCEPTED_REQUEST" });
   }
-  if (job.attempt > 2 && !job.checkpoint.analysis) {
+  const analysisAttemptLimit = job.analysis_attempt_limit ?? 2;
+  if (!Number.isSafeInteger(analysisAttemptLimit) || analysisAttemptLimit < 2 || analysisAttemptLimit > 20) {
+    return await boundary.finish(job, "failed", { error_code: "INVALID_ATTEMPT_BUDGET" });
+  }
+  if (job.attempt > analysisAttemptLimit && !job.checkpoint.analysis) {
     return await boundary.finish(job, "failed", { error_code: "ATTEMPT_BUDGET_EXHAUSTED" });
   }
   let metadata = job.checkpoint.metadata as ResourceMetadata | undefined;

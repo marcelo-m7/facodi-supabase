@@ -61,6 +61,109 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
             role="postgres",
         )
 
+    def failed_job(self):
+        self.enqueue()
+        job = self.claim()
+        self.checkpoint(job)
+        receipt = json.loads(self.sql(
+            "select public.facodi_canonical_finish("
+            f"'{job['id']}', '{job['claim_token']}', 'failed', '{{\"error_code\":\"PROVIDER_FAILED\"}}')"
+        ))
+        return job, receipt
+
+    def retry_query(self, job, command_id=None, revision=0):
+        return (
+            "select public.facodi_canonical_retry("
+            f"'{job['id']}', '{self.task_ref}', 1, 'p2', '{command_id or uuid4()}', {revision})"
+        )
+
+    def test_retry_preserves_identity_checkpoints_attempts_and_prior_failure(self):
+        job, prior = self.failed_job()
+        request = self.sql('select request_payload from public.facodi_canonical_jobs')
+        query = self.retry_query(job)
+        self.sql(f'begin; {query}; rollback')
+        self.assertEqual(self.sql('select status from public.facodi_canonical_jobs'), 'failed')
+        self.assertEqual(self.sql('select count(*) from public.facodi_canonical_commands'), '0')
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '0')
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            responses = list(executor.map(lambda _: self.sql(query), range(20)))
+        self.assertEqual(len(set(responses)), 1)
+        retried = json.loads(responses[0])
+        self.assertEqual(retried['receipt']['job_id'], job['id'])
+        self.assertEqual(retried['receipt']['attempt'], 1)
+        self.assertEqual(retried['receipt']['status'], 'queued')
+        self.assertEqual(retried['command_revision'], 1)
+        self.assertEqual(json.loads(self.sql('select prior_receipt from public.facodi_canonical_commands')), prior)
+        self.assertEqual(self.sql('select request_payload from public.facodi_canonical_jobs'), request)
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '1')
+        recovered = self.claim()
+        self.assertEqual(recovered['id'], job['id'])
+        self.assertEqual(recovered['attempt'], 2)
+        self.assertEqual(recovered['analysis_attempt_limit'], 3)
+        self.assertEqual(recovered['checkpoint'], job['checkpoint'] | {'metadata': {'title': 'Evidence'}})
+        self.assertNotEqual(recovered['queue_message_id'], job['queue_message_id'])
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.finish(job)
+        self.finish(recovered)
+        self.assertEqual(json.loads(self.sql(query)), retried)
+
+    def test_retry_rejects_scope_version_status_identity_and_lifetime_exhaustion(self):
+        job, _prior = self.failed_job()
+        query = self.retry_query(job)
+        for changed in (query.replace(", 1, 'p2'", ", 2, 'p2'"),
+                        self.retry_query(job, revision=1), self.retry_query(job, revision=-1)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.sql(changed)
+        self.assertEqual(self.sql('select status from public.facodi_canonical_jobs'), 'failed')
+        self.sql(f"update public.facodi_canonical_jobs set attempt=20 where id='{job['id']}'", role='postgres')
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql(query)
+        self.sql('update public.facodi_canonical_jobs set attempt=1', role='postgres')
+        accepted = json.loads(self.sql(query))
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql(self.retry_query(job, revision=1))
+        cancel_query = query.replace('facodi_canonical_retry', 'facodi_canonical_cancel')
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql(cancel_query)
+        self.assertEqual(json.loads(self.sql(query)), accepted)
+        self.assertEqual(self.sql('select count(*) from public.facodi_canonical_commands'), '1')
+
+    def test_retry_budget_never_creates_attempt_twenty_one(self):
+        job, _prior = self.failed_job()
+        self.sql('update public.facodi_canonical_jobs set attempt=19', role='postgres')
+        self.sql(self.retry_query(job))
+        final = self.claim()
+        self.assertEqual(final['attempt'], 20)
+        self.assertEqual(final['analysis_attempt_limit'], 20)
+        self.expire(final)
+        self.assertIsNone(self.claim())
+        receipt = json.loads(self.sql(
+            'select public.facodi_canonical_receipt('
+            f"'{job['id']}', '{self.task_ref}', 1, 'p2')"
+        ))
+        self.assertEqual(receipt['attempt'], 20)
+        self.assertEqual(receipt['status'], 'failed')
+        self.assertEqual(receipt['result']['error_code'], 'ATTEMPT_BUDGET_EXHAUSTED')
+        self.assertEqual(self.sql('select count(*) from pgmq.q_facodi_canonical_analysis'), '0')
+
+    def test_retry_discards_old_messages_and_replays_after_later_cancel(self):
+        job, _prior = self.failed_job()
+        self.sql("select pgmq.send('facodi_canonical_analysis', "
+                 f"jsonb_build_object('job_id', '{job['id']}'))")
+        query = self.retry_query(job)
+        retried = json.loads(self.sql(query))
+        self.assertIsNone(self.claim())
+        self.assertEqual(self.sql('select attempt from public.facodi_canonical_jobs'), '1')
+        current = self.claim()
+        self.assertEqual(current['attempt'], 2)
+        self.sql('select public.facodi_canonical_cancel('
+                 f"'{job['id']}', '{self.task_ref}', 1, 'p2', '{uuid4()}', 1)")
+        self.assertEqual(json.loads(self.sql(query)), retried)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.sql(self.retry_query(job, revision=2))
+        self.assertEqual(self.sql('select status from public.facodi_canonical_jobs'), 'cancelled')
+        self.assertEqual(self.sql('select count(*) from public.facodi_canonical_commands'), '2')
+
     def test_versioned_cancel_replays_and_fences_the_previous_worker(self):
         accepted = self.enqueue()
         job = self.claim()
@@ -232,6 +335,7 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
                 "select * from public.facodi_canonical_jobs",
                 "select * from public.facodi_canonical_commands",
                 "select public.facodi_canonical_cancel(gen_random_uuid(), 'task:' || gen_random_uuid()::text, 1, 'p2', gen_random_uuid(), 0)",
+                "select public.facodi_canonical_retry(gen_random_uuid(), 'task:' || gen_random_uuid()::text, 1, 'p2', gen_random_uuid(), 0)",
                 "select public.facodi_canonical_claim()",
                 "select public.facodi_canonical_receipt(gen_random_uuid(), 'task:' || gen_random_uuid()::text, 1, 'p2')",
                 "select * from pgmq.q_facodi_canonical_analysis",
