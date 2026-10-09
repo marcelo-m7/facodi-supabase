@@ -4,10 +4,42 @@ import { baselineText, chunkText, enrichCanonicalText, validateEnrichedText } fr
 import { canonicalTransport } from "../supabase/functions/_shared/canonical_transport.ts";
 import endpoint from "../supabase/functions/v4_canonical_analysis/index.ts";
 import { mapAcceptedCatalog, validateAcceptedCatalog, verifyAcceptedCatalog, type AcceptedCatalog } from "../supabase/functions/_shared/canonical_mapping.ts";
+import { fetchTranscript, YoutubeTranscriptVideoUnavailableError } from "npm:youtube-transcript-plus@2.0.3";
+import { acquireCanonicalYoutube } from "../supabase/functions/_shared/canonical_ingestion.ts";
+import { HttpError } from "../supabase/functions/_shared/http.ts";
 
 function assert(value: unknown, message = "assertion failed"): asserts value {
   if (!value) throw new Error(message);
 }
+
+function transcriptResponse(path: string, captionUrl = "https://www.youtube.com/api/timedtext?v=4GVbqYFmGBw&lang=pt", text = "Durable &amp; safe evidence."): Response {
+  if (path === "/watch") return new Response('"INNERTUBE_API_KEY":"fixture"');
+  if (path === "/youtubei/v1/player") return Response.json({
+    playabilityStatus: { status: "OK" }, videoDetails: { videoId: "4GVbqYFmGBw", title: "Private evidence" },
+    captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ languageCode: "pt", baseUrl: captionUrl }] } },
+  });
+  return new Response(`<transcript><text start="0" dur="1">${text}</text></transcript>`);
+}
+
+Deno.test("pinned transcript parser runs on Deno without hidden rate-limit retries", async () => {
+  let calls = 0;
+  try {
+    await fetchTranscript("4GVbqYFmGBw", {
+      retries: 0,
+      videoFetch: async ({ url }) => {
+        assert(new URL(url).hostname === "www.youtube.com");
+        calls += 1;
+        return new Response("", { status: 429 });
+      },
+      playerFetch: async () => { throw new Error("Unexpected player request"); },
+      transcriptFetch: async () => { throw new Error("Unexpected transcript request"); },
+    });
+    throw new Error("Rate limit was accepted");
+  } catch (error) {
+    assert(error instanceof YoutubeTranscriptVideoUnavailableError);
+  }
+  assert(calls === 1);
+});
 
 function fixture() {
   const calls: string[] = [];
@@ -40,12 +72,130 @@ function fixture() {
   return { job, boundary, calls, metadata, analysis };
 }
 
+Deno.test("canonical transcript acquisition uses the pinned parser and bounded identity-safe network", async () => {
+  const calls: string[] = [];
+  const transport = (async (input, init) => {
+    const url = new URL(String(input));
+    assert(init?.redirect === "error" && init.signal instanceof AbortSignal);
+    calls.push(url.pathname);
+    return transcriptResponse(url.pathname);
+  }) as typeof fetch;
+  const result = await acquireCanonicalYoutube({ source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw",
+    title: "Accepted title", language: "pt" }, transport);
+  assert(calls.join(",") === "/watch,/youtubei/v1/player,/api/timedtext");
+  assert(result.document_data?.text_content === "Durable & safe evidence.");
+  assert(result.document_data.extraction_version === "2.0.3" && result.language === "pt");
+});
+
+Deno.test("canonical transcript rate limits become safe input failures without hidden requests", async () => {
+  let calls = 0;
+  try {
+    await acquireCanonicalYoutube({ source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw",
+      title: "Accepted title", language: "pt" }, (async () => {
+      calls += 1;
+      return new Response("", { status: 429 });
+    }) as typeof fetch);
+    throw new Error("Blocked acquisition was accepted");
+  } catch (error) {
+    assert(error instanceof HttpError && error.code === "YOUTUBE_IP_BLOCKED");
+  }
+  assert(calls === 1);
+});
+
+Deno.test("canonical transcript caption URLs cannot redirect acquisition to another authority or video", async () => {
+  for (const captionUrl of ["https://127.0.0.1/api/timedtext?v=4GVbqYFmGBw",
+      "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ",
+      "https://www.youtube.com:444/api/timedtext?v=4GVbqYFmGBw",
+      "https://secret@www.youtube.com/api/timedtext?v=4GVbqYFmGBw"]) {
+    let calls = 0;
+    try {
+      await acquireCanonicalYoutube({ source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw",
+        title: "Accepted title", language: "pt" }, (async (input) => {
+        calls += 1;
+        return transcriptResponse(new URL(String(input)).pathname, captionUrl);
+      }) as typeof fetch);
+      throw new Error("Changed caption authority was accepted");
+    } catch (error) {
+      assert(error instanceof HttpError && error.code === "CANONICAL_INPUT_CHANGED");
+    }
+    assert(calls === 2);
+  }
+});
+
+Deno.test("canonical transcript rejects oversized HTTP or extracted text instead of truncating", async () => {
+  for (const oversizedHttp of [true, false]) {
+    let calls = 0;
+    try {
+      await acquireCanonicalYoutube({ source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw",
+        title: "Accepted title", language: "pt" }, (async (input) => {
+        calls += 1;
+        return oversizedHttp ? new Response("x".repeat(2097153)) :
+          transcriptResponse(new URL(String(input)).pathname, undefined, "x".repeat(12001));
+      }) as typeof fetch);
+      throw new Error("Oversized acquisition was accepted");
+    } catch (error) {
+      assert(error instanceof HttpError && error.code === "INPUT_BUDGET_EXHAUSTED");
+    }
+    assert(calls === (oversizedHttp ? 1 : 3));
+  }
+});
+
 Deno.test("fresh worker persists each checkpoint before an unpublished terminal result", async () => {
   const test = fixture();
   const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
   assert(test.calls.join(",") === "metadata,checkpoint:metadata,analyze,checkpoint:analysis,needs_review");
   assert((result.document_data as { text_content: string }).text_content === test.job.request_payload.raw_content);
   assert(!("publication" in result));
+});
+
+Deno.test("automatic transcript recovery reuses immutable acquisition before paid analysis", async () => {
+  const test = fixture();
+  test.job.request_payload = { ...test.job.request_payload, source_type: "youtube",
+    source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw", raw_content: "",
+    acquisition_config: { provider: "youtube-transcript-plus", version: "2.0.3" } };
+  const metadata = { ...test.metadata, document_data: {
+    text_content: "Acquired source evidence", language: "pt", source_url: test.job.request_payload.source_url,
+    extraction_provider: "youtube-transcript-plus", extraction_version: "2.0.3",
+  } };
+  test.boundary.metadata = async () => { test.calls.push("acquire"); return metadata; };
+  test.boundary.checkpoint = async (_job, key, value) => {
+    test.calls.push(`checkpoint:${key}`);
+    test.job.checkpoint[key] = value;
+  };
+  test.boundary.analyze = async (_metadata, request) => {
+    assert(request.raw_content === metadata.document_data.text_content);
+    assert(test.job.request_payload.raw_content === "");
+    test.calls.push("analyze");
+    return { ...test.analysis, document_data: { text_content: request.raw_content, language: request.language } };
+  };
+  await processCanonicalJob(test.boundary);
+  assert(test.calls.join(",") === "acquire,checkpoint:metadata,analyze,checkpoint:analysis,needs_review");
+  test.calls.length = 0;
+  await processCanonicalJob(test.boundary);
+  assert(test.calls.join(",") === "needs_review");
+  assert(test.job.request_payload.raw_content === "");
+});
+
+Deno.test("automatic transcript input failures finish safely before checkpoint or payment", async () => {
+  const test = fixture();
+  test.job.request_payload = { ...test.job.request_payload, source_type: "youtube",
+    source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw", raw_content: "",
+    acquisition_config: { provider: "youtube-transcript-plus", version: "2.0.3" } };
+  test.boundary.metadata = async () => { throw new HttpError(422, "YOUTUBE_LANGUAGE_UNAVAILABLE"); };
+  const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+  assert(result.error_code === "YOUTUBE_LANGUAGE_UNAVAILABLE" && test.calls.join(",") === "failed");
+});
+
+Deno.test("automatic transcript recovery rejects changed source evidence without payment", async () => {
+  const test = fixture();
+  test.job.request_payload = { ...test.job.request_payload, source_type: "youtube",
+    source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw", raw_content: "",
+    acquisition_config: { provider: "youtube-transcript-plus", version: "2.0.3" } };
+  test.job.checkpoint.metadata = { ...test.metadata, document_data: { text_content: "Changed evidence",
+    language: "pt", source_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    extraction_provider: "youtube-transcript-plus", extraction_version: "2.0.3" } };
+  const result = await processCanonicalJob(test.boundary) as Record<string, unknown>;
+  assert(result.error_code === "INVALID_SOURCE_CHECKPOINT" && test.calls.join(",") === "failed");
 });
 
 function catalogFixture(): AcceptedCatalog {
@@ -421,6 +571,10 @@ Deno.test({
       globalThis.fetch = (async (input, init) => {
         const request = new Request(input, init);
         const url = new URL(request.url);
+        if (url.hostname === "www.youtube.com") {
+          assert(!request.headers.has("apikey") && init?.redirect === "error");
+          return transcriptResponse(url.pathname);
+        }
         const name = url.pathname.split("/").at(-1)!;
         assert(url.origin === environment.SUPABASE_URL && functions.has(name));
         assert(request.headers.get("apikey") === environment.SUPABASE_SECRET_KEY);
@@ -487,6 +641,25 @@ Deno.test({
       assert(JSON.stringify(recovered.result) === JSON.stringify(completed.result));
       assert(JSON.stringify(await (await call("", retry)).json()) === JSON.stringify(retried));
       assert(await sql("select count(*) from public.facodi_canonical_commands;") === 2);
+      const automaticSubmit = { ...submit, task_ref: `task:${crypto.randomUUID()}`,
+        request: { ...submit.request, source_type: "youtube", raw_content: "",
+          source_url: "https://www.youtube.com/watch?v=4GVbqYFmGBw",
+          acquisition_config: { provider: "youtube-transcript-plus", version: "2.0.3" } } };
+      const automaticAccepted = await call("", automaticSubmit);
+      assert(automaticAccepted.status === 202);
+      const automaticJob = (await automaticAccepted.json()).receipt;
+      const automaticWork = await call("/work", {});
+      assert(automaticWork.status === 200);
+      const automaticReceipt = (await automaticWork.json()).receipt;
+      assert(automaticReceipt.job_id === automaticJob.job_id && automaticReceipt.status === "needs_review");
+      assert(automaticReceipt.result.document_data.text_content === "Durable & safe evidence.");
+      assert(automaticReceipt.result.metadata.document_data.extraction_version === "2.0.3");
+      assert(submit.request.catalog_snapshot);
+      assert(automaticReceipt.result.mapping_data.snapshot_hash === submit.request.catalog_snapshot.snapshot_hash);
+      assert(!("publication" in automaticReceipt.result));
+      assert(JSON.stringify((await (await call("", automaticSubmit)).json()).receipt) === JSON.stringify(automaticReceipt));
+      assert(await sql("select request_payload->'raw_content' from public.facodi_canonical_jobs where id=:'p_job_id';",
+        { p_job_id: automaticJob.job_id }) === "");
     } finally {
       globalThis.fetch = originalFetch;
       for (const [key, value] of Object.entries(previous)) {

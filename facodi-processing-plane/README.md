@@ -68,9 +68,22 @@ receipts are monotonic, replayable and never publish Odoo content.
 
 The candidate includes bounded submit/receipt transport and a `/work` endpoint.
 Worker execution requires `FACODI_CANONICAL_WORKER_ENABLED=true`; it is disabled
-by default. Manual/Markdown text and explicit YouTube transcripts are limited to
-12000 UTF-8 bytes. Source acquisition, binary documents and versioned commands
-are not yet cut over. No input is silently truncated.
+by default. Manual/Markdown text, explicit YouTube transcripts and automatic
+YouTube acquisition are limited to 12000 UTF-8 bytes. Automatic intake freezes
+`youtube-transcript-plus` version `2.0.3`; the worker uses the real parser with
+one 30-second deadline and a 2 MiB HTTP response bound, exact accepted-video
+identity, an HTTPS YouTube endpoint allowlist and no redirects. Acquired text
+and provenance live in the immutable metadata checkpoint, not in a rewritten
+request. Known input failures terminate before enrichment and recoverable
+transport failures remain subject to durable claims. Binary documents and large
+inputs/catalogs are not yet cut over. No input is silently truncated.
+
+Versioned cancellation/retry commands are atomic and idempotent, with scoped
+command identity, append-only prior-receipt audit and old-message/claim fencing.
+Cancellation never pretends to interrupt an active external call. Retry preserves
+accepted input and checkpoints, granting at most two additional claims per
+explicit command, capped at twenty lifetime attempts. Old completed analyses
+are reused without another paid call.
 
 Accepted requests may carry the frozen authorized native course catalog. Its
 company/Website scope and Python sorted-ASCII-JSON SHA-256 are validated before
@@ -87,19 +100,20 @@ are rejected by the bounded wire contract, not silently reduced.
 The worker preserves the accepted lexical baseline or structured Gemini model,
 evidence schema and output-token budget. Missing Gemini credentials fail closed;
 v3 metadata fallback is not a substitute. Gemini uses server-only
-`FACODI_ENRICHMENT_API_KEY`, a bounded deadline and no redirects. At most two
-claims may invoke analysis; later claims can only finish an already persisted
+`FACODI_ENRICHMENT_API_KEY`, a bounded deadline and no redirects. Claims beyond
+the accepted analysis-attempt budget can only finish an already persisted
 analysis checkpoint. A new analysis requires 75 seconds of live lease and each
 RPC has a 10-second deadline. Outputs are bounded before persistence. Scheduling and
 full provider/source parity remain acceptance requirements, not implied by this
 endpoint.
 
-Local evidence: eight real database tests and twenty-six Deno tests, including the
+Local evidence: seventeen real database tests and thirty-seven Deno tests, including the
 actual secret-auth wrapper and Supabase client over native SQL transactions.
 They prove terminal replay, role/scope denial, crash fencing, saved-checkpoint
 recovery, input/output/cost bounds and no publication. CI makes native execution
 mandatory and freezes the dependency lock. No remote migration/function or Odoo
-intake activation has been performed. Final API/Learning integration, runtime
+intake activation has been performed. Native API/Learning source projection is
+verified independently; final integrated acceptance, runtime
 image identity and private canary remain required before activation.
 
 1. Treat the FACODI project and `docs/current-facodi-runtime.md` as the source of truth.

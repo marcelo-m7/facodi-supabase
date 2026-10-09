@@ -13,12 +13,23 @@ Versioned retry adds atomic rollback, twenty concurrent command replays, stable
 job/input/checkpoint identity, prior-failure preservation, stale-message/worker
 fencing and a lifetime ceiling of twenty attempts. Each explicit retry grants at
 most two additional claims; it cannot revive a cancelled or successful job.
-`canonical_worker_test.ts` executes 29 Deno tests, including the actual secret
+`canonical_worker_test.ts` executes 37 Deno tests, including the actual secret
 authentication wrapper/client against native SQL for unpublished completion and
 versioned cancellation/retry replay and recovery of a committed analysis without
 another provider call. It uses `docker exec` against
 only a disposable local container and the fixed `facodi_canonical_ci` database.
 It never connects to remote Supabase or production Odoo.
+
+Automatic YouTube fixtures exercise the pinned real transcript parser through
+bounded synthetic watch/player/timed-text responses, source/video identity and
+transport denial, oversized text/response rejection without truncation, safe
+input-required failures before enrichment, immutable acquisition checkpoints
+and recovery without another acquisition or paid call. The authenticated native
+SQL endpoint fixture preserves the accepted empty request and finishes with one
+unpublished result. Real read-only acquisition was also exercised locally: a
+short public video produced 225 bytes of English text, while the larger reference
+video returned `INPUT_BUDGET_EXHAUSTED`. Those probes submitted no jobs, logged
+no transcript text and do not establish remote Edge or production acceptance.
 
 After starting local Supabase PostgreSQL and loading the queue, command and retry migrations in
 that dedicated test database:

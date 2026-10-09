@@ -3,6 +3,7 @@ import { canonicalTransport, type CanonicalRpc } from "../_shared/canonical_tran
 import { processCanonicalJob, type CanonicalJob } from "../_shared/canonical_worker.ts";
 import { enrichCanonicalText } from "../_shared/canonical_enrichment.ts";
 import { fetchResourceMetadata } from "../_shared/v3_youtube.ts";
+import { acquireCanonicalYoutube } from "../_shared/canonical_ingestion.ts";
 import { ensureMethod, HttpError, json, withHttp } from "../_shared/http.ts";
 
 export default {
@@ -29,7 +30,7 @@ export default {
           finish: async (job, status, result) => await rpc("facodi_canonical_finish", {
             p_job_id: job.id, p_token: job.claim_token, p_status: status, p_result: result,
           }),
-          metadata: async (request) => await fetchResourceMetadata(request.source_url, {
+          metadata: async (request) => request.acquisition_config ? await acquireCanonicalYoutube(request) : await fetchResourceMetadata(request.source_url, {
             provider: request.source_type, title: request.title, language: request.language,
           }),
           analyze: async (_metadata, request) => {
