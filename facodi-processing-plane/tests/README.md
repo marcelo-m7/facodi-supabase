@@ -13,7 +13,7 @@ Versioned retry adds atomic rollback, twenty concurrent command replays, stable
 job/input/checkpoint identity, prior-failure preservation, stale-message/worker
 fencing and a lifetime ceiling of twenty attempts. Each explicit retry grants at
 most two additional claims; it cannot revive a cancelled or successful job.
-`canonical_worker_test.ts` executes 37 Deno tests, including the actual secret
+`canonical_worker_test.ts` executes 41 Deno tests, including the actual secret
 authentication wrapper/client against native SQL for unpublished completion and
 versioned cancellation/retry replay and recovery of a committed analysis without
 another provider call. It uses `docker exec` against
@@ -42,3 +42,10 @@ FACODI_CANONICAL_TEST_CONTAINER=supabase_db_facodi-processing-plane \
 The database suite skips without that explicit local environment variable;
 the mandatory `canonical-database` CI job sets it and runs the native suite,
 schema lint and security advisors. Static tests alone are not queue acceptance.
+
+The isolated-worker CI additionally builds the digest-pinned image and runs it
+offline as nonroot with a read-only root, no capabilities, bounded memory/CPU
+and temporary storage. Five `document_worker_test.ts` checks execute the actual
+API-owned PDF/DOCX converter, preserve large bounded text, reject oversized or
+invalid input, deny inherited credentials and kill a stalled child. The native
+converter tests require `FACODI_TEST_API_SOURCE` and never silently skip.

@@ -26,6 +26,27 @@ jobs:
         run: |
           npx --yes deno@2.9.6 test --frozen --allow-env tests/canonical_worker_test.ts
           npx --yes deno@2.9.6 check --frozen supabase/functions/v4_canonical_analysis/index.ts
+          npx --yes deno@2.9.6 check --frozen workers/canonical/index.ts workers/canonical/document.ts
+  isolated-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: facodi-processing-plane
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the digest-pinned independent worker
+        run: docker build -f workers/canonical/Dockerfile -t facodi-isolated-worker-ci .
+      - name: Offline default-off startup and real bounded PDF/DOCX conversion
+        run: |
+          set -o pipefail
+          isolation=(--rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --memory=512m --cpus=1 --pids-limit=64 --cap-drop=ALL --security-opt=no-new-privileges)
+          docker run "${isolation[@]}" facodi-isolated-worker-ci --once | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"disabled"}'
+          docker run "${isolation[@]}" \
+            -e FACODI_TEST_API_SOURCE=/opt/facodi-api -e FACODI_TEST_PYTHON=/usr/local/bin/python3 \
+            -v "$PWD/tests:/app/tests:ro" --entrypoint /usr/bin/deno facodi-isolated-worker-ci \
+            test --config=/app/deno.json --frozen --cached-only --allow-env \
+            --allow-write=/tmp --allow-run=/usr/local/bin/python3 /app/tests/document_worker_test.ts
   canonical-database:
     runs-on: ubuntu-latest
     timeout-minutes: 15

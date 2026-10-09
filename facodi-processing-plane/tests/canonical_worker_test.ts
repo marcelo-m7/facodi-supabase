@@ -7,10 +7,65 @@ import { mapAcceptedCatalog, validateAcceptedCatalog, verifyAcceptedCatalog, typ
 import { fetchTranscript, YoutubeTranscriptVideoUnavailableError } from "npm:youtube-transcript-plus@2.0.3";
 import { acquireCanonicalYoutube } from "../supabase/functions/_shared/canonical_ingestion.ts";
 import { HttpError } from "../supabase/functions/_shared/http.ts";
+import { runCanonicalWorkerOnce, validateWorkerConfiguration } from "../workers/canonical/index.ts";
 
 function assert(value: unknown, message = "assertion failed"): asserts value {
   if (!value) throw new Error(message);
 }
+
+Deno.test("isolated worker defaults off before creating a client or claiming work", async () => {
+  assert(await runCanonicalWorkerOnce({}, () => { throw new Error("client creation is forbidden"); }) === "disabled");
+  assert(await runCanonicalWorkerOnce({ FACODI_ISOLATED_WORKER_ENABLED: "false" },
+    () => { throw new Error("client creation is forbidden"); }) === "disabled");
+});
+
+Deno.test("isolated worker rejects wrong targets and nonsecret credentials before any claim", () => {
+  for (const [url, key, enabled] of [
+    ["https://other.supabase.co", "sb_secret_disposable", "true"],
+    ["https://bhfywztfyidvrlarebmg.supabase.co", "sb_publishable_disposable", "true"],
+    ["https://bhfywztfyidvrlarebmg.supabase.co", "sb_secret_unsafe\"", "true"],
+    ["https://bhfywztfyidvrlarebmg.supabase.co", "sb_secret_disposable", "yes"],
+  ]) {
+    let denied = false;
+    try { validateWorkerConfiguration({ SUPABASE_URL: url, SUPABASE_SECRET_KEY: key, FACODI_ISOLATED_WORKER_ENABLED: enabled }); }
+    catch (error) { denied = error instanceof HttpError && error.code === "isolated_worker_configuration_invalid"; }
+    assert(denied);
+  }
+});
+
+Deno.test("isolated worker uses the same recovery engine and does not return private result payloads", async () => {
+  const current = fixture();
+  const status = await runCanonicalWorkerOnce({ FACODI_ISOLATED_WORKER_ENABLED: "true",
+    SUPABASE_URL: "https://bhfywztfyidvrlarebmg.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_disposable" },
+    () => current.boundary);
+  assert(status === "processed");
+  assert(current.calls.join(",") === "metadata,checkpoint:metadata,analyze,checkpoint:analysis,needs_review");
+});
+
+Deno.test("isolated worker uses the real standard SDK with scoped redirect-safe RPC transport", async () => {
+  const oldFetch = globalThis.fetch;
+  const url = Deno.env.get("SUPABASE_URL");
+  const key = Deno.env.get("SUPABASE_SECRET_KEY");
+  const environment = { FACODI_ISOLATED_WORKER_ENABLED: "true",
+    SUPABASE_URL: "https://bhfywztfyidvrlarebmg.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_disposable" };
+  let calls = 0;
+  try {
+    Deno.env.set("SUPABASE_URL", environment.SUPABASE_URL);
+    Deno.env.set("SUPABASE_SECRET_KEY", environment.SUPABASE_SECRET_KEY);
+    globalThis.fetch = (async (input, init) => {
+      assert(String(input) === `${environment.SUPABASE_URL}/rest/v1/rpc/facodi_canonical_claim`);
+      assert(init?.redirect === "error" && new Headers(init.headers).get("apikey") === environment.SUPABASE_SECRET_KEY);
+      calls += 1;
+      return Response.json(null);
+    }) as typeof fetch;
+    assert(await runCanonicalWorkerOnce(environment) === "idle");
+    assert(calls === 1);
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (url === undefined) Deno.env.delete("SUPABASE_URL"); else Deno.env.set("SUPABASE_URL", url);
+    if (key === undefined) Deno.env.delete("SUPABASE_SECRET_KEY"); else Deno.env.set("SUPABASE_SECRET_KEY", key);
+  }
+});
 
 function transcriptResponse(path: string, captionUrl = "https://www.youtube.com/api/timedtext?v=4GVbqYFmGBw&lang=pt", text = "Durable &amp; safe evidence."): Response {
   if (path === "/watch") return new Response('"INNERTUBE_API_KEY":"fixture"');

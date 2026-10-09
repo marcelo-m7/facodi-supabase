@@ -1,9 +1,7 @@
 import { withSupabase } from "npm:@supabase/server@1.9.1";
 import { canonicalTransport, type CanonicalRpc } from "../_shared/canonical_transport.ts";
-import { processCanonicalJob, type CanonicalJob } from "../_shared/canonical_worker.ts";
-import { enrichCanonicalText } from "../_shared/canonical_enrichment.ts";
-import { fetchResourceMetadata } from "../_shared/v3_youtube.ts";
-import { acquireCanonicalYoutube } from "../_shared/canonical_ingestion.ts";
+import { processCanonicalJob } from "../_shared/canonical_worker.ts";
+import { canonicalBoundary } from "../_shared/canonical_boundary.ts";
 import { ensureMethod, HttpError, json, withHttp } from "../_shared/http.ts";
 
 export default {
@@ -20,26 +18,7 @@ export default {
         if (Deno.env.get("FACODI_CANONICAL_WORKER_ENABLED") !== "true") {
           throw new HttpError(503, "canonical_worker_disabled");
         }
-        const receipt = await processCanonicalJob({
-          claim: async () => await rpc("facodi_canonical_claim") as CanonicalJob | null,
-          checkpoint: async (job, key, value) => {
-            await rpc("facodi_canonical_checkpoint", {
-              p_job_id: job.id, p_token: job.claim_token, p_key: key, p_value: value,
-            });
-          },
-          finish: async (job, status, result) => await rpc("facodi_canonical_finish", {
-            p_job_id: job.id, p_token: job.claim_token, p_status: status, p_result: result,
-          }),
-          metadata: async (request) => request.acquisition_config ? await acquireCanonicalYoutube(request) : await fetchResourceMetadata(request.source_url, {
-            provider: request.source_type, title: request.title, language: request.language,
-          }),
-          analyze: async (_metadata, request) => {
-            const accepted = request.provider_config;
-            const key = accepted.provider === "gemini" ? Deno.env.get("FACODI_ENRICHMENT_API_KEY") ?? null : null;
-            if (accepted.provider === "gemini" && !key) throw new HttpError(503, "accepted_provider_unavailable");
-            return await enrichCanonicalText(request, key);
-          },
-        });
+        const receipt = await processCanonicalJob(canonicalBoundary(rpc, Deno.env.get("FACODI_ENRICHMENT_API_KEY") ?? null));
         return json({ receipt });
       });
     }
