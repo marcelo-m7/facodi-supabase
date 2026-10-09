@@ -1,0 +1,27 @@
+import { withSupabase } from "npm:@supabase/server@1.9.1";
+import { canonicalTransport, type CanonicalRpc } from "../_shared/canonical_transport.ts";
+import { processCanonicalJob } from "../_shared/canonical_worker.ts";
+import { canonicalBoundary } from "../_shared/canonical_boundary.ts";
+import { ensureMethod, HttpError, json, withHttp } from "../_shared/http.ts";
+
+export default {
+  fetch: withSupabase({ auth: "secret:*" }, async (req, ctx) => {
+    const rpc: CanonicalRpc = async (name, values) => {
+      const { data, error } = await ctx.supabaseAdmin.rpc(name, values).abortSignal(AbortSignal.timeout(10000));
+      if (error) throw new HttpError(error.code === "P0002" ? 404 :
+        ["22023", "40001"].includes(error.code) ? 409 : 503, "canonical_boundary_failed");
+      return data;
+    };
+    if (new URL(req.url).pathname.endsWith("/work")) {
+      return await withHttp(req, async () => {
+        ensureMethod(req, "POST");
+        if (Deno.env.get("FACODI_CANONICAL_WORKER_ENABLED") !== "true") {
+          throw new HttpError(503, "canonical_worker_disabled");
+        }
+        const receipt = await processCanonicalJob(canonicalBoundary(rpc, Deno.env.get("FACODI_ENRICHMENT_API_KEY") ?? null));
+        return json({ receipt });
+      });
+    }
+    return await canonicalTransport(req, rpc);
+  }),
+};

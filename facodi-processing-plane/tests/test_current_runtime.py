@@ -16,6 +16,7 @@ class CurrentFacodiRuntimeContract(unittest.TestCase):
             {
                 "_shared",
                 "v3_analyze_learning_resource",
+                "v4_canonical_analysis",
                 "v3_discover_resource_metadata",
                 "v3_ingest_youtube_video",
                 "v2_ingest_youtube_video",
@@ -33,12 +34,13 @@ class CurrentFacodiRuntimeContract(unittest.TestCase):
             function_sections,
             {
                 "v3_analyze_learning_resource",
+                "v4_canonical_analysis",
                 "v3_discover_resource_metadata",
                 "v3_ingest_youtube_video",
                 "v2_ingest_youtube_video",
             },
         )
-        self.assertEqual(config.count("verify_jwt = false"), 4)
+        self.assertEqual(config.count("verify_jwt = false"), 5)
 
     def test_open2_runtime_surfaces_are_not_deployable(self):
         forbidden = {

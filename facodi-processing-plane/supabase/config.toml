@@ -16,6 +16,9 @@ policy = "oneshot"
 [functions.v3_analyze_learning_resource]
 verify_jwt = false
 
+[functions.v4_canonical_analysis]
+verify_jwt = false
+
 [functions.v3_discover_resource_metadata]
 verify_jwt = false
 
