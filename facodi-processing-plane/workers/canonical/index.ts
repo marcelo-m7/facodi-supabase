@@ -19,7 +19,7 @@ export function validateWorkerConfiguration(environment: Record<string, string |
 function runtimeBoundary(): WorkerBoundary {
   const admin = createAdminClient({ supabaseOptions: { global: { fetch: async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== TARGET || !["/rest/v1/rpc/facodi_canonical_claim",
+    if (url.origin !== TARGET || !["/rest/v1/rpc/facodi_canonical_claim_for_runtime",
         "/rest/v1/rpc/facodi_canonical_checkpoint", "/rest/v1/rpc/facodi_canonical_finish"].includes(url.pathname)) {
       throw new HttpError(503, "canonical_boundary_failed");
     }
@@ -30,7 +30,7 @@ function runtimeBoundary(): WorkerBoundary {
     if (error) throw new HttpError(503, "canonical_boundary_failed");
     return data;
   };
-  return canonicalBoundary(rpc, Deno.env.get("FACODI_ENRICHMENT_API_KEY") ?? null);
+  return canonicalBoundary(rpc, Deno.env.get("FACODI_ENRICHMENT_API_KEY") ?? null, "isolated");
 }
 
 export async function runCanonicalWorkerOnce(environment: Record<string, string | undefined>,

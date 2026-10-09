@@ -5,9 +5,12 @@ import { fetchResourceMetadata } from "./v3_youtube.ts";
 import { acquireCanonicalYoutube } from "./canonical_ingestion.ts";
 import { HttpError } from "./http.ts";
 
-export function canonicalBoundary(rpc: CanonicalRpc, enrichmentKey: string | null): WorkerBoundary {
+export function canonicalBoundary(rpc: CanonicalRpc, enrichmentKey: string | null,
+  runtime: "edge" | "isolated" = "edge"): WorkerBoundary {
   return {
-    claim: async () => await rpc("facodi_canonical_claim") as CanonicalJob | null,
+    runtime,
+    claim: async () => await (runtime === "edge" ? rpc("facodi_canonical_claim") :
+      rpc("facodi_canonical_claim_for_runtime", { p_runtime: runtime })) as CanonicalJob | null,
     checkpoint: async (job, key, value) => {
       await rpc("facodi_canonical_checkpoint", {
         p_job_id: job.id, p_token: job.claim_token, p_key: key, p_value: value,

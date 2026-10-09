@@ -3,7 +3,7 @@
 `test_current_runtime.py` preserves the explicit FACODI v3 function inventory
 and excludes retired Open2 surfaces.
 
-`test_canonical_queue.py` executes seventeen native PostgreSQL tests: twenty real
+`test_canonical_queue.py` executes twenty-one native PostgreSQL tests: twenty real
 concurrent enqueues, twenty independent claims, caller rollback, expired-lease
 recovery/fencing, immutable checkpoint replay, terminal response loss/replay,
 payload bounds and Public/authenticated denial. Versioned cancellation adds
@@ -13,7 +13,12 @@ Versioned retry adds atomic rollback, twenty concurrent command replays, stable
 job/input/checkpoint identity, prior-failure preservation, stale-message/worker
 fencing and a lifetime ceiling of twenty attempts. Each explicit retry grants at
 most two additional claims; it cannot revive a cancelled or successful job.
-`canonical_worker_test.ts` executes 41 Deno tests, including the actual secret
+Runtime routing additionally exercises legacy Edge defaults, explicit isolated
+claims, twenty concurrent mixed-runtime claims without crossing or duplication,
+checkpoint recovery and old-token fencing, invalid runtime rejection and
+Public/authenticated denial. A fresh four-migration install, schema lint and
+security advisors passed against a disposable database.
+`canonical_worker_test.ts` executes 42 Deno tests, including the actual secret
 authentication wrapper/client against native SQL for unpublished completion and
 versioned cancellation/retry replay and recovery of a committed analysis without
 another provider call. It uses `docker exec` against
@@ -31,7 +36,7 @@ short public video produced 225 bytes of English text, while the larger referenc
 video returned `INPUT_BUDGET_EXHAUSTED`. Those probes submitted no jobs, logged
 no transcript text and do not establish remote Edge or production acceptance.
 
-After starting local Supabase PostgreSQL and loading the queue, command and retry migrations in
+After starting local Supabase PostgreSQL and loading the queue, command, retry and runtime migrations in
 that dedicated test database:
 
 ```bash

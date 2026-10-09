@@ -13,6 +13,14 @@ selection, paid-call budgets, immutable checkpoints and stale-token fencing are
 unchanged. The CLI reports only a safe status, never receipts or source text.
 SIGTERM stops accepting work and allows the active bounded claim to finish.
 
+Accepted `execution_runtime` is either `edge` or `isolated`; legacy requests
+without this field remain Edge-owned. The isolated CLI calls only the
+service-role-only `facodi_canonical_claim_for_runtime('isolated')` boundary.
+Mixed-runtime claims never consume another runtime's visible messages. Recovery
+preserves the accepted runtime and checkpoint and fences the previous token.
+The execution boundary also rejects a mismatched accepted runtime before
+acquisition or a provider call.
+
 The image pins Python/Deno digests, every parser dependency and API converter
 source `f3258cc550ab04f712d475f87569a40ce39c8c39`. Only the existing standalone
 converter is copied; Odoo and its configuration are not installed. Conversion
@@ -27,13 +35,13 @@ total memory. No public port, Docker socket, Odoo database credentials or
 persistent Odoo/PostgreSQL volumes are permitted. Deployment must place the
 worker on a separate egress network and pin this source revision exactly.
 
-Local evidence: four CLI/SDK tests, five actual converter tests and offline
+Local evidence: 42 worker tests, 21 native database tests, five actual converter tests and offline
 startup/parser execution in the restricted image passed. API's credential
 isolation revision has exact-head CI acceptance. The owner CI makes image
 construction and offline parser execution mandatory.
 
 This is an execution foundation, not full document intake or full P2 acceptance.
 Canonical intake still excludes binary and oversized payloads. Private immutable
-source/catalog/result transport, accepted runtime routing, lease-budget parity,
+source/catalog/result transport, lease-budget parity,
 integrated crash recovery and private productive canary remain required before
 activation. No remote schema/function change or production activation is implied.

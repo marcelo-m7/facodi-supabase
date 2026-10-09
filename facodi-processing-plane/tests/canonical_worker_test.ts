@@ -35,6 +35,8 @@ Deno.test("isolated worker rejects wrong targets and nonsecret credentials befor
 
 Deno.test("isolated worker uses the same recovery engine and does not return private result payloads", async () => {
   const current = fixture();
+  current.job.request_payload.execution_runtime = "isolated";
+  current.boundary.runtime = "isolated";
   const status = await runCanonicalWorkerOnce({ FACODI_ISOLATED_WORKER_ENABLED: "true",
     SUPABASE_URL: "https://bhfywztfyidvrlarebmg.supabase.co", SUPABASE_SECRET_KEY: "sb_secret_disposable" },
     () => current.boundary);
@@ -53,7 +55,8 @@ Deno.test("isolated worker uses the real standard SDK with scoped redirect-safe 
     Deno.env.set("SUPABASE_URL", environment.SUPABASE_URL);
     Deno.env.set("SUPABASE_SECRET_KEY", environment.SUPABASE_SECRET_KEY);
     globalThis.fetch = (async (input, init) => {
-      assert(String(input) === `${environment.SUPABASE_URL}/rest/v1/rpc/facodi_canonical_claim`);
+      assert(String(input) === `${environment.SUPABASE_URL}/rest/v1/rpc/facodi_canonical_claim_for_runtime`);
+      assert(JSON.parse(String(init?.body)).p_runtime === "isolated");
       assert(init?.redirect === "error" && new Headers(init.headers).get("apikey") === environment.SUPABASE_SECRET_KEY);
       calls += 1;
       return Response.json(null);
@@ -126,6 +129,14 @@ function fixture() {
   };
   return { job, boundary, calls, metadata, analysis };
 }
+
+Deno.test("accepted runtime mismatch fails before acquisition or another paid call", async () => {
+  const current = fixture();
+  current.job.request_payload.execution_runtime = "isolated";
+  const result = await processCanonicalJob(current.boundary) as { error_code: string };
+  assert(result.error_code === "INVALID_ACCEPTED_REQUEST");
+  assert(current.calls.join(",") === "failed");
+});
 
 Deno.test("canonical transcript acquisition uses the pinned parser and bounded identity-safe network", async () => {
   const calls: string[] = [];

@@ -40,6 +40,65 @@ class CanonicalQueueDatabaseTests(unittest.TestCase):
         value = self.sql("select public.facodi_canonical_claim()")
         return json.loads(value) if value else None
 
+    def claim_isolated(self):
+        value = self.sql("select public.facodi_canonical_claim_for_runtime('isolated')")
+        return json.loads(value) if value else None
+
+    def test_accepted_runtime_selects_only_matching_work_without_consuming_other_messages(self):
+        isolated = self.enqueue('{"execution_runtime":"isolated"}')
+        self.task_ref = "task:" + str(uuid4())
+        legacy = self.enqueue()
+        edge = self.claim()
+        self.assertEqual(edge['id'], legacy['job_id'])
+        self.assertIsNone(self.claim())
+        external = self.claim_isolated()
+        self.assertEqual(external['id'], isolated['job_id'])
+        self.assertEqual(external['attempt'], 1)
+        self.assertEqual(external['request_payload'], {'execution_runtime': 'isolated'})
+        self.assertIsNone(self.claim_isolated())
+
+    def test_isolated_claim_recovery_preserves_checkpoint_and_fences_old_token(self):
+        self.enqueue('{"execution_runtime":"isolated"}')
+        first = self.claim_isolated()
+        self.checkpoint(first)
+        self.expire(first)
+        self.assertIsNone(self.claim())
+        recovered = self.claim_isolated()
+        self.assertEqual(recovered['id'], first['id'])
+        self.assertEqual(recovered['checkpoint'], {'metadata': {'title': 'Evidence'}})
+        self.assertEqual(recovered['attempt'], 2)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.checkpoint(first)
+        self.finish(recovered)
+
+    def test_runtime_claim_rejects_invalid_runtimes_and_unprivileged_roles(self):
+        for runtime in ("NULL", "'unexpected'"):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.sql(f"select public.facodi_canonical_claim_for_runtime({runtime})")
+        for role in ('anon', 'authenticated'):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.sql("select public.facodi_canonical_claim_for_runtime('isolated')", role=role)
+        for payload in ('{"execution_runtime":null}', '{"execution_runtime":true}', '{"execution_runtime":"unknown"}'):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.enqueue(payload)
+
+    def test_concurrent_runtime_claims_never_cross_or_duplicate_accepted_execution(self):
+        expected = {'edge': set(), 'isolated': set()}
+        for runtime in expected:
+            for _index in range(10):
+                self.task_ref = "task:" + str(uuid4())
+                expected[runtime].add(self.enqueue(json.dumps({'execution_runtime': runtime}))['job_id'])
+        runtimes = ['edge', 'isolated'] * 10
+        def claim_runtime(runtime):
+            return json.loads(self.sql(f"select public.facodi_canonical_claim_for_runtime('{runtime}')"))
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            jobs = list(executor.map(claim_runtime, runtimes))
+        self.assertEqual(len({job['id'] for job in jobs}), 20)
+        for runtime, job in zip(runtimes, jobs):
+            self.assertIn(job['id'], expected[runtime])
+            self.assertEqual(job['request_payload']['execution_runtime'], runtime)
+            self.assertEqual(job['attempt'], 1)
+
     def checkpoint(self, job, value='{"title":"Evidence"}'):
         return int(self.sql(
             "select public.facodi_canonical_checkpoint("

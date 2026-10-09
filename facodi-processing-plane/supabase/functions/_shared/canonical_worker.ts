@@ -5,6 +5,7 @@ import { mapAcceptedCatalog, validateAcceptedCatalog, verifyAcceptedCatalog, typ
 import type { AcquiredMetadata } from "./canonical_ingestion.ts";
 
 export interface CanonicalRequest {
+  execution_runtime?: "edge" | "isolated";
   source_type: "manual" | "markdown" | "youtube";
   source_url: string;
   title: string;
@@ -36,6 +37,7 @@ export interface AnalysisCheckpoint {
 }
 
 export interface WorkerBoundary {
+  runtime?: "edge" | "isolated";
   claim(): Promise<CanonicalJob | null>;
   checkpoint(job: CanonicalJob, key: string, value: unknown): Promise<void>;
   finish(job: CanonicalJob, status: "needs_review" | "failed", result: unknown): Promise<unknown>;
@@ -48,8 +50,9 @@ export function validateCanonicalRequest(value: unknown, companyId?: number): Ca
     throw new HttpError(400, "invalid_canonical_request");
   }
   const request = value as CanonicalRequest;
-  const allowed = new Set(["source_type", "source_url", "title", "raw_content", "language", "provider_config", "catalog_snapshot", "acquisition_config"]);
+  const allowed = new Set(["source_type", "source_url", "title", "raw_content", "language", "provider_config", "catalog_snapshot", "acquisition_config", "execution_runtime"]);
   if (Object.keys(request).some((key) => !allowed.has(key)) ||
+      (request.execution_runtime !== undefined && !["edge", "isolated"].includes(request.execution_runtime)) ||
       !["manual", "markdown", "youtube"].includes(request.source_type) ||
       [request.source_url, request.title, request.raw_content, request.language].some((field) => typeof field !== "string") ||
       request.title.length > 256 || request.language.length > 20 || request.source_url.length > 2048 ||
@@ -99,6 +102,9 @@ export async function processCanonicalJob(boundary: WorkerBoundary): Promise<unk
   let request: CanonicalRequest;
   try {
     request = validateCanonicalRequest(job.request_payload, job.company_id);
+    if ((request.execution_runtime ?? "edge") !== (boundary.runtime ?? "edge")) {
+      throw new HttpError(409, "invalid_accepted_runtime");
+    }
     if (request.catalog_snapshot) await verifyAcceptedCatalog(request.catalog_snapshot);
   } catch (_error) {
     return await boundary.finish(job, "failed", { error_code: "INVALID_ACCEPTED_REQUEST" });
